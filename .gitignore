@@ -1,0 +1,11 @@
+# Ignore the virtual environment
+venv/
+env/
+.env
+
+# Ignore the database
+dates.db
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
