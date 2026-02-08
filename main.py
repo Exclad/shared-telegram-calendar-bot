@@ -4,6 +4,7 @@ import os
 import html
 import pytz  # Used for Timezone calculations
 from datetime import datetime
+from functools import wraps  # Used for the security decorator
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ParseMode
@@ -20,6 +21,15 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     print("Error: TELEGRAM_TOKEN not found in .env file.")
     exit()
+
+# Get the allowed users from the environment (comma-separated string)
+# Example Env Var in Portainer: ALLOWED_IDS="123456789,987654321"
+allowed_ids_str = os.getenv("ALLOWED_IDS", "")
+# Convert the string "123, 456" into a list of integers [123, 456]
+ALLOWED_USERS = [int(x.strip()) for x in allowed_ids_str.split(",") if x.strip()]
+
+if not ALLOWED_USERS:
+    print("Warning: ALLOWED_IDS is empty. No one will be able to use the bot commands.")
 
 # --- LOGGING SETUP ---
 # 1. Basic Logging: This prints info to your console so you know what the bot is doing.
@@ -82,7 +92,7 @@ NOTE_TITLE, NOTE_CONTENT = range(3, 5)
 DELETE_CHOICE = 5
 SET_TIMEZONE = 6 
 
-# --- HELPER FUNCTIONS: KEYBOARDS ---
+# --- HELPER FUNCTIONS: KEYBOARDS & SECURITY ---
 
 def get_main_keyboard():
     """Returns the main menu buttons seen at the bottom of the chat."""
@@ -107,8 +117,25 @@ def secure_text(text):
         return html.escape(text)
     return ""
 
+def restricted(func):
+    """
+    Decorator: Checks if the user is in the ALLOWED_USERS list.
+    If not, it ignores their message and logs the attempt.
+    """
+    @wraps(func)
+    async def wrapped(update, context, *args, **kwargs):
+        user_id = update.effective_user.id
+        if user_id not in ALLOWED_USERS:
+            print(f"Unauthorized access attempt from {user_id}")
+            # Optional: You can uncomment the line below to tell the stranger they are blocked
+            await update.message.reply_text("⛔️ Sorry, this is a private bot.")
+            return  # Stop execution here, do not run the actual command
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
 # --- GENERIC COMMANDS ---
 
+@restricted
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Triggered by /start. Welcomes the user and shows the menu."""
     await update.message.reply_text(
@@ -126,6 +153,7 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- OUR JOURNEY LOGIC ---
 
+@restricted
 async def our_journey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Calculates how long you have been together based on an event named 'Anniversary'.
@@ -171,6 +199,7 @@ async def our_journey(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- TIMEZONE LOGIC ---
 
+@restricted
 async def timezone_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 1: Ask the user to pick a timezone."""
     keyboard = [
@@ -217,6 +246,7 @@ async def save_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- ADD EVENT LOGIC ---
 
+@restricted
 async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 1: Ask for the event name."""
     await update.message.reply_text(
@@ -275,6 +305,7 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- ADD NOTE LOGIC ---
 
+@restricted
 async def add_note_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 1: Ask for Note Title."""
     await update.message.reply_text(
@@ -318,6 +349,7 @@ async def get_note_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- LIST DATA LOGIC ---
 
+@restricted
 async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetches and displays all saved events."""
     conn = sqlite3.connect("dates.db")
@@ -341,6 +373,7 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         await update.message.reply_text(message, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
 
+@restricted
 async def list_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetches and displays all saved notes/photos."""
     conn = sqlite3.connect("dates.db")
@@ -384,6 +417,7 @@ async def list_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- DELETION LOGIC ---
 
+@restricted
 async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 1: Ask user what category to delete (Date or Note)."""
     keyboard = [
