@@ -90,7 +90,9 @@ def init_db():
 NAME, DATE, TIME = range(3)
 NOTE_TITLE, NOTE_CONTENT = range(3, 5)
 DELETE_CHOICE = 5
-SET_TIMEZONE = 6 
+SET_TIMEZONE = 6
+# New States for Editing
+EDIT_SELECT_ID, EDIT_SELECT_FIELD, EDIT_NEW_VALUE = range(7, 10)
 
 # --- HELPER FUNCTIONS: KEYBOARDS & SECURITY ---
 
@@ -99,8 +101,9 @@ def get_main_keyboard():
     keyboard = [
         [KeyboardButton("📅 List Dates"), KeyboardButton("➕ Add Date")],
         [KeyboardButton("📝 View Notes"), KeyboardButton("➕ Add Note")],
-        [KeyboardButton("❤️ Our Journey"), KeyboardButton("🗑 Delete Item")],
-        [KeyboardButton("🌍 Set Timezone")]  # The new button for Timezones
+        [KeyboardButton("✏️ Edit Date"), KeyboardButton("✏️ Edit Note")],  # <-- Added Edit Buttons
+        [KeyboardButton("🗑 Delete Item"), KeyboardButton("❤️ Our Journey")],
+        [KeyboardButton("🌍 Set Timezone")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -127,9 +130,9 @@ def restricted(func):
         user_id = update.effective_user.id
         if user_id not in ALLOWED_USERS:
             print(f"Unauthorized access attempt from {user_id}")
-            # Optional: You can uncomment the line below to tell the stranger they are blocked
+            # Optional: Tell the stranger they are blocked
             await update.message.reply_text("⛔️ Sorry, this is a private bot.")
-            return  # Stop execution here, do not run the actual command
+            return  # Stop execution here
         return await func(update, context, *args, **kwargs)
     return wrapped
 
@@ -490,6 +493,177 @@ async def delete_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Please select an option or enter a valid ID number.", reply_markup=get_back_keyboard())
         return DELETE_CHOICE
 
+# --- EDIT LOGIC (NEW) ---
+
+@restricted
+async def edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Step 1: Determine if user wants to edit Dates or Notes based on the button clicked.
+    Lists the items and asks for an ID.
+    """
+    text = update.message.text
+    conn = sqlite3.connect("dates.db")
+    cursor = conn.cursor()
+    
+    if "Date" in text:
+        context.user_data['edit_type'] = 'event'
+        cursor.execute("SELECT id, name, event_date FROM events WHERE chat_id = ?", (update.effective_chat.id,))
+        rows = cursor.fetchall()
+        if not rows:
+            await update.message.reply_text("No dates found to edit.", reply_markup=get_main_keyboard())
+            conn.close()
+            return ConversationHandler.END
+        msg = "✏️ <b>Reply with the ID to edit:</b>\n\n"
+        for r_id, name, date_str in rows:
+            msg += f"ID: <b>{r_id}</b> | {secure_text(name)} ({date_str})\n"
+            
+    else: # Edit Note
+        context.user_data['edit_type'] = 'note'
+        cursor.execute("SELECT id, title FROM notes WHERE chat_id = ?", (update.effective_chat.id,))
+        rows = cursor.fetchall()
+        if not rows:
+            await update.message.reply_text("No notes found to edit.", reply_markup=get_main_keyboard())
+            conn.close()
+            return ConversationHandler.END
+        msg = "✏️ <b>Reply with the ID to edit:</b>\n\n"
+        for r_id, title in rows:
+            msg += f"ID: <b>{r_id}</b> | {secure_text(title)}\n"
+
+    conn.close()
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
+    return EDIT_SELECT_ID
+
+async def edit_select_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 2: User provided an ID. Show them what they can change."""
+    try:
+        item_id = int(update.message.text)
+        context.user_data['edit_id'] = item_id
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number ID.", reply_markup=get_back_keyboard())
+        return EDIT_SELECT_ID
+
+    conn = sqlite3.connect("dates.db")
+    cursor = conn.cursor()
+    
+    if context.user_data['edit_type'] == 'event':
+        cursor.execute("SELECT name, event_date, notify_time FROM events WHERE id = ? AND chat_id = ?", (item_id, update.effective_chat.id))
+        row = cursor.fetchone()
+        if not row:
+            await update.message.reply_text("ID not found. Try again.", reply_markup=get_back_keyboard())
+            conn.close()
+            return EDIT_SELECT_ID
+        
+        # Save current values to display later
+        context.user_data['current_values'] = {'Name': row[0], 'Date': row[1], 'Time': row[2]}
+        keyboard = [[KeyboardButton("Name"), KeyboardButton("Date"), KeyboardButton("Time")], [KeyboardButton("🔙 Back")]]
+        await update.message.reply_text(
+            f"Found Date: <b>{secure_text(row[0])}</b>\nWhat do you want to change?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        )
+        
+    else: # Note
+        cursor.execute("SELECT title, content FROM notes WHERE id = ? AND chat_id = ?", (item_id, update.effective_chat.id))
+        row = cursor.fetchone()
+        if not row:
+            await update.message.reply_text("ID not found. Try again.", reply_markup=get_back_keyboard())
+            conn.close()
+            return EDIT_SELECT_ID
+            
+        context.user_data['current_values'] = {'Title': row[0], 'Content': row[1]}
+        keyboard = [[KeyboardButton("Title"), KeyboardButton("Content")], [KeyboardButton("🔙 Back")]]
+        await update.message.reply_text(
+            f"Found Note: <b>{secure_text(row[0])}</b>\nWhat do you want to change?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        )
+
+    conn.close()
+    return EDIT_SELECT_FIELD
+
+async def edit_select_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 3: User picked a field (e.g., 'Name'). Ask for the new value."""
+    field = update.message.text
+    context.user_data['edit_field'] = field
+    
+    current_val = context.user_data['current_values'].get(field, "Unknown")
+    
+    await update.message.reply_text(
+        f"Current <b>{field}</b> is: {secure_text(str(current_val))}\n\n"
+        f"Please enter the new value:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_back_keyboard()
+    )
+    return EDIT_NEW_VALUE
+
+async def edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 4: Validate and Save the new value to the DB."""
+    new_value = update.message.text
+    field = context.user_data['edit_field']
+    item_id = context.user_data['edit_id']
+    
+    # Validation Logic
+    if context.user_data['edit_type'] == 'event':
+        db_column = ""
+        if field == "Name":
+            db_column = "name"
+        elif field == "Date":
+            try:
+                datetime.strptime(new_value, "%d-%m-%Y")
+                db_column = "event_date"
+            except ValueError:
+                await update.message.reply_text("Invalid Date Format. Use DD-MM-YYYY.", reply_markup=get_back_keyboard())
+                return EDIT_NEW_VALUE
+        elif field == "Time":
+            try:
+                datetime.strptime(new_value, "%H:%M")
+                db_column = "notify_time"
+            except ValueError:
+                await update.message.reply_text("Invalid Time Format. Use HH:MM.", reply_markup=get_back_keyboard())
+                return EDIT_NEW_VALUE
+        
+        # Execute Update for Event
+        conn = sqlite3.connect("dates.db")
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE events SET {db_column} = ? WHERE id = ? AND chat_id = ?", 
+                       (new_value, item_id, update.effective_chat.id))
+        conn.commit()
+        conn.close()
+
+    else: # Note
+        db_column = ""
+        final_content = new_value
+        photo_id = None
+        
+        if field == "Title":
+            db_column = "title"
+        elif field == "Content":
+            db_column = "content"
+            # Handle if user sent a photo instead of text
+            if update.message.photo:
+                photo_id = update.message.photo[-1].file_id
+                final_content = update.message.caption if update.message.caption else ""
+                # We need to update both content and photo_id
+                conn = sqlite3.connect("dates.db")
+                cursor = conn.cursor()
+                cursor.execute("UPDATE notes SET content = ?, photo_id = ? WHERE id = ? AND chat_id = ?", 
+                               (final_content, photo_id, item_id, update.effective_chat.id))
+                conn.commit()
+                conn.close()
+                await update.message.reply_text("✅ Note updated successfully!", reply_markup=get_main_keyboard())
+                return ConversationHandler.END
+
+        # Execute Update for Note Text
+        conn = sqlite3.connect("dates.db")
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE notes SET {db_column} = ? WHERE id = ? AND chat_id = ?", 
+                       (final_content, item_id, update.effective_chat.id))
+        conn.commit()
+        conn.close()
+
+    await update.message.reply_text(f"✅ <b>{field}</b> updated successfully!", parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
+    return ConversationHandler.END
+
 # --- NOTIFICATION SYSTEM (CRON JOB) ---
 
 async def check_reminders(application: Application):
@@ -668,10 +842,25 @@ if __name__ == "__main__":
         ],
     ))
 
+    # Conversation: Edit Item (NEW)
+    application.add_handler(ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^✏️ Edit (Date|Note)$"), edit_start)
+        ],
+        states={
+            EDIT_SELECT_ID: [MessageHandler(text_filter, edit_select_id)],
+            EDIT_SELECT_FIELD: [MessageHandler(text_filter, edit_select_field)],
+            EDIT_NEW_VALUE: [MessageHandler((text_filter | filters.PHOTO), edit_save)]
+        },
+        fallbacks=[
+            CommandHandler("cancel", back_to_menu),
+            MessageHandler(filters.Regex("^🔙 Back$"), back_to_menu)
+        ],
+    ))
+
     # Global Error Handler
     application.add_error_handler(error_handler)
 
     # 4. Run the Bot
     print("Bot is running...")
     application.run_polling()
-    
