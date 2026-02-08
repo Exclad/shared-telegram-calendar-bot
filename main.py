@@ -9,6 +9,7 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram.error import NetworkError, Forbidden
 
 # --- CONFIGURATION ---
 # Load environment variables from the .env file (where your Token lives)
@@ -537,6 +538,22 @@ async def post_init(application: Application):
     scheduler.add_job(check_reminders, "interval", seconds=60, args=[application])
     scheduler.start()
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and handle specific connection issues."""
+    
+    # If the error is a network issue, just log a warning (don't crash)
+    if isinstance(context.error, NetworkError):
+        logging.warning(f"Network Error: {context.error} (The bot will retry automatically)")
+        return
+
+    # If the error is Forbidden (user blocked bot), strictly log it
+    if isinstance(context.error, Forbidden):
+        logging.error(f"User blocked the bot: {context.error}")
+        return
+
+    # For all other unknown errors, print the full traceback so we can debug later
+    logging.error("Exception while handling an update:", exc_info=context.error)
+
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
     # 1. Initialize Database (Create tables if missing)
@@ -616,6 +633,9 @@ if __name__ == "__main__":
             MessageHandler(filters.Regex("^🔙 Back$"), back_to_menu)
         ],
     ))
+
+    # Global Error Handler
+    application.add_error_handler(error_handler)
 
     # 4. Run the Bot
     print("Bot is running...")
