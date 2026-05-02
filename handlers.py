@@ -235,7 +235,7 @@ async def our_journey(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        start_date = datetime.strptime(date_str, "%d-%m-%Y")
+        start_date = datetime.strptime(date_str, "%d-%m-%Y").replace(tzinfo=dt_timezone.utc)
         today = datetime.now(dt_timezone.utc)
         years, months, days = calculate_elapsed(start_date, today)
         total_days = (today - start_date).days
@@ -487,7 +487,7 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE, page: 
     item_kb = build_event_list_inline(page_events)
     nav_rows = build_pagination_nav(page, total, "ev")
     keyboard = InlineKeyboardMarkup(
-        (item_kb.inline_keyboard if item_kb else []) + nav_rows
+        list(item_kb.inline_keyboard if item_kb else []) + nav_rows
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
@@ -505,7 +505,7 @@ async def page_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item_kb = build_event_list_inline(page_events)
     nav_rows = build_pagination_nav(target_page, total, "ev")
     keyboard = InlineKeyboardMarkup(
-        (item_kb.inline_keyboard if item_kb else []) + nav_rows
+        list(item_kb.inline_keyboard if item_kb else []) + nav_rows
     )
     await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
@@ -546,7 +546,7 @@ async def list_notes(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
     inline_kb = build_note_list_inline(page_notes)
     nav_rows = build_pagination_nav(page, total, "nt")
     keyboard = InlineKeyboardMarkup(
-        (inline_kb.inline_keyboard if inline_kb else []) + nav_rows
+        list(inline_kb.inline_keyboard if inline_kb else []) + nav_rows
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
@@ -572,7 +572,7 @@ async def page_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inline_kb = build_note_list_inline(page_notes)
     nav_rows = build_pagination_nav(target_page, total, "nt")
     keyboard = InlineKeyboardMarkup(
-        (inline_kb.inline_keyboard if inline_kb else []) + nav_rows
+        list(inline_kb.inline_keyboard if inline_kb else []) + nav_rows
     )
     await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
