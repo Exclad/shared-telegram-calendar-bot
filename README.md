@@ -1,130 +1,116 @@
 # ❤️ Relationship Memory Bot
 
-A personal Telegram bot designed for couples to track important dates, share notes (text & photos), and calculate how long they have been together.
+A private Telegram bot for couples to track important dates, share notes (text & photos), and calculate how long they have been together — with timezone-aware reminders.
 
 ## ✨ Features
 
-  * **📅 Recurring Reminders:** Tracks birthdays and anniversaries.
-  * **🔔 Smart Alerts:** Sends notifications 1 month, 1 week, 1 day, and the Day Of the event.
-  * **📝 Shared Notes:** Save text notes or photos (e.g., wifi passwords, gift ideas, memories).
-  * **❤️ "Our Journey":** Calculates exactly how many years, months, and days you have been together.
-  * **👥 Group Support:** Works perfectly in a shared group chat between you and your partner.
-  * **☁️ Persistent Storage:** Uses a local SQLite database (`dates.db`).
-
------
+- **📅 Events with reminders:** Add recurring (yearly) or one-time events. Get notified 1 month, 2-4 weeks, 1 day, and on the day.
+- **🌍 Timezone support:** Each chat sets its own timezone. Reminders fire at the correct local time.
+- **📝 Notes with photos:** Save text notes or photos with captions.
+- **❤️ "Our Journey":** Calculates years, months, and days since a configurable event (anniversary, wedding, etc.).
+- **🔍 Upcoming:** Lists all events in the next 3 months.
+- **📤 Export:** Dumps all events and notes as a text message.
+- **⌨️ Inline keyboards:** Edit or delete items directly from list views — no ID typing needed.
+- **📄 Pagination:** Lists show 5 items per page with Prev/Next navigation.
+- **🔒 Access control:** Only users in `ALLOWED_USERS` can interact with the bot.
+- **🛡️ Gap-protected scheduler:** Missed reminders are caught up after brief downtime (up to 2-hour window).
+- **💾 Persistent storage:** SQLite with WAL mode for concurrent access.
 
 ## 🛠️ Prerequisites
 
-Before running the bot, you need:
-
-1.  **A Telegram Bot Token:** Talk to [@BotFather](https://t.me/BotFather) on Telegram to create a new bot and get the API Token.
-2.  **Python 3.11+** (For running locally).
-3.  **Docker** (For running on a NAS or Server).
-
------
+1. **A Telegram Bot Token** — Talk to [@BotFather](https://t.me/BotFather) to create a bot and get the API token.
+2. **Docker** (for NAS/Server) or **Python 3.11+** (for local development).
 
 ## ⚙️ Configuration
 
-1.  Create a file named `.env` in the same folder as your code.
-2.  Add your token inside it:
-    ```env
-    TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-    ```
+Create a `.env` file:
 
------
+```env
+TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+ALLOWED_IDS=123456789,987654321
+```
+
+- `TELEGRAM_TOKEN` — Your bot token from BotFather (required).
+- `ALLOWED_IDS` — Comma-separated Telegram user IDs that can use the bot. If empty, no one can interact with it.
 
 ## 🚀 How to Run
 
-### Method 1: Running Locally (VS Code / Terminal)
-
-*Best for testing or running on your personal computer.*
-
-1.  **Install Dependencies:**
-    Open your terminal in the project folder and run:
-
-    ```bash
-    pip install python-telegram-bot python-dotenv APScheduler
-    ```
-
-    *(Or use `pip install -r requirements.txt` if you have one).*
-
-2.  **Start the Bot:**
-    Run the script:
-
-    ```bash
-    python main.py
-    ```
-
-3.  **Success:**
-    You should see "Bot is running..." in the terminal. Go to Telegram and press `/start`.
-
------
-
-### Method 2: Docker Container (NAS / Portainer)
-
-*Best for running 24/7 on a NAS, Raspberry Pi, or Server.*
-
-#### 1\. Prepare the Image
-
-Create a file named `Dockerfile` in your project folder:
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py .
-COPY .env .
-CMD ["python", "main.py"]
-```
-
-#### 2\. Build and Export
-
-Run these commands on your computer to create a file you can upload to your NAS:
+### Method 1: Local (for testing)
 
 ```bash
-# Build the image
-docker build -t relationship-bot:v1 .
-
-# Save it to a .tar file
-docker save -o relationship-bot.tar relationship-bot:v1
+pip install -r requirements.txt
+python main.py
 ```
 
-#### 3\. Deploy on Portainer (NAS)
+### Method 2: Docker / Portainer (NAS)
 
-1.  **Import:** Go to **Images** -\> **Import** -\> Upload `relationship-bot.tar`.
-2.  **Create Container:** Go to **Containers** -\> **Add Container**.
-3.  **Image:** Type `relationship-bot:v1`.
-4.  **Restart Policy:** Set to `Always`.
+#### Build the image
 
-#### ⚠️ 4. The Critical Step (Database Persistence)
+```bash
+docker build -t shared-telegram-calendar-bot:latest .
+```
 
-To ensure your dates are saved even if the NAS restarts, you must map the database file.
+Or in Portainer: **Images → Build new** — point to the GitHub repo or upload the project folder.
 
-1.  **On your NAS File Manager:** Create an **empty file** named `dates.db` in your docker folder (e.g., `/docker/bot/dates.db`).
+#### Run the container
 
-      * *Note: Do not create a folder\! It must be a file.*
+- **Image:** `shared-telegram-calendar-bot:latest`
+- **Restart policy:** `Always`
+- **Volumes** (bind mounts — critical for data persistence):
+  - Host path: `/path/on/nas/.env` → Container path: `/app/.env`
+  - Host path: `/path/on/nas/dates.db` → Container path: `/app/dates.db`
 
-2.  **In Portainer Volumes:**
+The `.env` and `dates.db` are excluded from the Docker image via `.dockerignore` — they must be bind-mounted at runtime.
 
-      * **Container Path:** `/app/dates.db`
-      * **Host Path:** Select the `dates.db` file you just created on your NAS.
-
-3.  **Deploy\!**
-
------
+> **Note:** If `dates.db` doesn't exist yet, the bot auto-creates it on first run.
 
 ## 📱 How to Use
 
-1.  Create a Telegram Group with your partner.
-2.  Add the Bot to the group.
-3.  Type `/start` (or press the Menu button if available).
-4.  **Set your Anniversary:** Click **➕ Add Date**, name it **"Anniversary"**, and set the date. This enables the "❤️ Our Journey" button.
+1. Create a Telegram group with your partner, or use the bot in a private chat.
+2. Add the bot to the group if using a group chat.
+3. Type `/start` to see the main menu.
+4. **Set your timezone** with 🌍 Set Timezone so reminders arrive at the correct local time.
+5. **Add an event** with ➕ Add Date. Give it a name (e.g. "Anniversary"), a date, a notification time, and choose recurring or one-time.
+6. **Use ❤️ Our Journey** to see how long you've been together. By default it uses an event named "Anniversary" — customize this with ⚙️ Journey Event.
 
-### 💾 File Structure
+### Commands
 
-  * `main.py`: The application code.
-  * `.env`: Stores your API Token (Security).
-  * `dates.db`: The database file (Auto-created).
-  * `Dockerfile`: Instructions for building the container.
-  * `requirements.txt`: List of python libraries.
+| Command | Action |
+|---------|--------|
+| `/start` | Show the main menu |
+| `/help` | Show help and all commands |
+| `/add` | Add a new event |
+| `/addnote` | Add a new note |
+| `/upcoming` | Events in the next 3 months |
+| `/export` | Export all data as text |
+| `/timezone` | Set your timezone |
+| `/journey` | Change journey event |
+| `/delete` | Delete an item |
+| `/cancel` | Cancel current operation |
+
+### Reminder schedule
+
+For each event, the bot sends reminders at the configured notification time on these days:
+
+| Days until event | Message |
+|-----------------|---------|
+| 30 | "Head's up! X is in 1 month." |
+| 28, 21, 14, 7 | "Reminder: X is in N week(s)." |
+| 1 | "Get ready! X is TOMORROW!" |
+| 0 | "Today is the day! Happy X!" |
+
+## 💾 File Structure
+
+```
+.
+├── main.py           # Entry point — builds and runs the bot
+├── config.py         # Environment loading, constants, conversation states
+├── db.py             # All database operations (parameterized queries, WAL, retry)
+├── handlers.py       # Command, message, and callback handlers
+├── keyboard.py       # Reply and inline keyboard layouts
+├── scheduler.py      # Background reminder scheduler with gap protection
+├── requirements.txt  # Python dependencies (pinned)
+├── Dockerfile        # Docker image definition
+├── .dockerignore     # Excludes .env and dates.db from build
+└── .env              # Your bot token and allowed user IDs (NOT in git)
+```
