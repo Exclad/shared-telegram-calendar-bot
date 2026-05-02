@@ -3,7 +3,7 @@
 import calendar
 import html
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 import pytz
@@ -14,6 +14,7 @@ from telegram.ext import (
     ConversationHandler,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 from telegram.error import NetworkError, Forbidden, Conflict
@@ -23,6 +24,7 @@ from config import (
     NAME,
     DATE,
     TIME,
+    RECURRING,
     NOTE_TITLE,
     NOTE_CONTENT,
     DELETE_CHOICE,
@@ -30,6 +32,9 @@ from config import (
     EDIT_SELECT_ID,
     EDIT_SELECT_FIELD,
     EDIT_NEW_VALUE,
+    INLINE_AWAIT_FIELD,
+    INLINE_AWAIT_VALUE,
+    JOURNEY_EVENT_STATE,
 )
 from db import (
     add_event,
@@ -45,6 +50,9 @@ from db import (
     delete_note,
     get_timezone,
     set_timezone as db_set_timezone,
+    get_journey_event,
+    set_journey_event,
+    get_journey_event_for_chat,
 )
 from keyboard import (
     get_main_keyboard,
@@ -53,6 +61,11 @@ from keyboard import (
     get_delete_choice_keyboard,
     get_event_field_keyboard,
     get_note_field_keyboard,
+    get_recurring_keyboard,
+    build_event_list_inline,
+    build_note_list_inline,
+    build_confirm_delete_inline,
+    build_edit_field_inline,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,6 +146,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@restricted
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "❓ **Help & Commands**\n\n"
+        "**Menu buttons:**\n"
+        "➕ Add Date — save a birthday, anniversary, etc.\n"
+        "📅 List Dates — view saved dates (with edit/delete buttons)\n"
+        "➕ Add Note — save text or a photo\n"
+        "📝 View Notes — view saved notes (with edit/delete buttons)\n"
+        "✏️ Edit Date/Note — edit an item by its ID\n"
+        "🗑 Delete Item — delete an item by its ID\n"
+        "❤️ Our Journey — show time since your anniversary\n"
+        "🔍 Upcoming — events in the next 3 months\n"
+        "🌍 Set Timezone — set your timezone for accurate alerts\n"
+        "⚙️ Journey Event — change which event powers Our Journey\n"
+        "📤 Export — dump all dates and notes as text\n\n"
+        "**Commands:**\n"
+        "/start — show main menu\n"
+        "/help — show this message\n"
+        "/add — add a new date\n"
+        "/addnote — add a new note\n"
+        "/upcoming — upcoming events\n"
+        "/export — export all data\n"
+        "/timezone — set timezone\n"
+        "/journey — change journey event\n"
+        "/delete — delete an item\n"
+        "/cancel — cancel current operation"
+    )
+    await update.message.reply_text(
+        text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard()
+    )
+
+
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "\U0001f519 Returned to Main Menu.", reply_markup=get_main_keyboard()
@@ -144,12 +190,14 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def our_journey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    date_str = get_anniversary_date(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    date_str, event_name = get_journey_event_for_chat(chat_id)
 
     if not date_str:
         await update.message.reply_text(
             "\U0001f494 I don't know when you started!\n\n"
-            "Please add an event named **Anniversary** so I can calculate your time together.",
+            f"Please add an event named **{event_name}** so I can calculate your time together.\n\n"
+            "You can change which event to use with ⚙️ Journey Event.",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -162,6 +210,7 @@ async def our_journey(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = (
             f"❤️ **Our Journey Together** ❤️\n\n"
+            f"Since **{date_str}**\n"
             f"We have been together for:\n"
             f"**{years}** Years, **{months}** Months, and **{days}** Days.\n\n"
             f"That is **{total_days}** days of love! \U0001f618"
@@ -169,8 +218,38 @@ async def our_journey(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
     except ValueError:
         await update.message.reply_text(
-            "Error calculating date. Please check your Anniversary date format."
+            "Error calculating date. Please check your date format."
         )
+
+
+# ── Journey Event Config ────────────────────────────────
+
+@restricted
+async def journey_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    current = get_journey_event(chat_id)
+    await update.message.reply_text(
+        f"⚙️ The current journey event is: **{current}**\n\n"
+        "Enter the exact name of the event you want to use for the ❤️ Our Journey calculation.\n"
+        "For example, if you have an event named 'Wedding', type: Wedding",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_back_keyboard(),
+    )
+    return JOURNEY_EVENT_STATE
+
+
+async def save_journey_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    event_name = update.message.text.strip()
+    chat_id = update.effective_chat.id
+
+    set_journey_event(chat_id, event_name)
+
+    await update.message.reply_text(
+        f"✅ Journey event set to **{secure_text(event_name)}**.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_main_keyboard(),
+    )
+    return ConversationHandler.END
 
 
 # ── Timezone ────────────────────────────────────────────
@@ -233,7 +312,7 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         datetime.strptime(date_text, "%d-%m-%Y")
         context.user_data["event_date"] = date_text
         await update.message.reply_text(
-            "Date saved! Now, what time to remind? (Format: HH:MM)\nType 'skip' for 12:00 ParseMode."
+            "Date saved! Now, what time to remind? (Format: HH:MM)\nType 'skip' for 12:00 PM."
         )
         return TIME
     except ValueError:
@@ -244,24 +323,38 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time_text = update.message.text.strip()
     if time_text.lower() == "skip":
-        final_time = "12:00"
+        context.user_data["notify_time"] = "12:00"
     else:
         try:
             datetime.strptime(time_text, "%H:%M")
-            final_time = time_text
+            context.user_data["notify_time"] = time_text
         except ValueError:
             await update.message.reply_text("Invalid format. Use HH:MM or type 'skip'.")
             return TIME
+
+    await update.message.reply_text(
+        "Is this a recurring event (yearly) or one-time?",
+        reply_markup=get_recurring_keyboard(),
+    )
+    return RECURRING
+
+
+async def get_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip().lower()
+    recurring = text.startswith("yes")
 
     add_event(
         update.effective_chat.id,
         context.user_data["event_name"],
         context.user_data["event_date"],
-        final_time,
+        context.user_data["notify_time"],
+        recurring=recurring,
     )
 
+    label = "Recurring" if recurring else "One-time"
     await update.message.reply_text(
-        f"✅ Saved: <b>{secure_text(context.user_data['event_name'])}</b> on {context.user_data['event_date']}!",
+        f"✅ Saved: <b>{secure_text(context.user_data['event_name'])}</b> "
+        f"on {context.user_data['event_date']} ({label})!",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard(),
     )
@@ -325,13 +418,18 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"(Timezone: {user_tz})\n\n"
     )
     for ev in events:
+        label = "♻️" if ev.get("recurring") else "1️⃣"
         message += (
-            f"• ID:{ev['id']} | <b>{secure_text(ev['name'])}</b>: "
-            f"{ev['event_date']} (Alert: {ev['notify_time']})\n"
+            f"{label} <b>{secure_text(ev['name'])}</b>: "
+            f"{ev['event_date']} at {ev['notify_time']}\n"
         )
 
+    inline_kb = build_event_list_inline(events)
+
     await update.message.reply_text(
-        message, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard()
+        message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=inline_kb if inline_kb else get_main_keyboard(),
     )
 
 
@@ -356,24 +454,113 @@ async def list_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             image_notes.append(note)
         else:
             has_text_notes = True
-            text_notes_message += f"\U0001f4cc ID:{note['id']} | <b>{secure_text(note['title'])}</b>\n"
+            text_notes_message += f"\U0001f4cc <b>{secure_text(note['title'])}</b>\n"
             if note["content"]:
                 text_notes_message += f"<code>{secure_text(note['content'])}</code>\n\n"
 
     if has_text_notes:
-        await update.message.reply_text(text_notes_message, parse_mode=ParseMode.HTML)
+        inline_kb = build_note_list_inline([
+            n for n in notes if not n["photo_id"]
+        ])
+        await update.message.reply_text(
+            text_notes_message,
+            parse_mode=ParseMode.HTML,
+            reply_markup=inline_kb,
+        )
     elif not image_notes:
         await update.message.reply_text("No text notes found.")
 
     for note in image_notes:
-        caption = f"\U0001f4cc ID:{note['id']} | <b>{secure_text(note['title'])}</b>"
+        caption = f"\U0001f4cc <b>{secure_text(note['title'])}</b>"
         if note["content"]:
             caption += f"\n{secure_text(note['content'])}"
         await update.message.reply_photo(
             photo=note["photo_id"], caption=caption, parse_mode=ParseMode.HTML
         )
 
-    await update.message.reply_text("Done.", reply_markup=get_main_keyboard())
+
+# ── Upcoming ────────────────────────────────────────────
+
+@restricted
+async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    events = get_events(update.effective_chat.id)
+    user_tz = get_timezone(update.effective_chat.id)
+
+    try:
+        tz = pytz.timezone(user_tz)
+    except pytz.UnknownTimeZoneError:
+        tz = pytz.utc
+
+    today = datetime.now(tz).date()
+    cutoff = today + timedelta(days=90)
+
+    upcoming_list: list[tuple[str, str, int]] = []  # (name, date_str, days_until)
+
+    for ev in events:
+        try:
+            ev_date = datetime.strptime(ev["event_date"], "%d-%m-%Y").date()
+            this_year = ev_date.replace(year=today.year)
+            if this_year < today:
+                this_year = ev_date.replace(year=today.year + 1)
+            days_until = (this_year - today).days
+            if days_until <= 90:
+                upcoming_list.append((ev["name"], this_year.strftime("%d-%m-%Y"), days_until))
+        except ValueError:
+            continue
+
+    upcoming_list.sort(key=lambda x: x[2])
+
+    if not upcoming_list:
+        await update.message.reply_text(
+            "No events in the next 3 months.",
+            reply_markup=get_main_keyboard(),
+        )
+        return
+
+    msg = f"🔍 **Upcoming Events** (next 3 months, {user_tz})\n\n"
+    for name, date_str, days in upcoming_list:
+        when = f"in {days} day(s)" if days > 0 else "TODAY!"
+        msg += f"• **{secure_text(name)}** — {date_str} ({when})\n"
+
+    await update.message.reply_text(
+        msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard()
+    )
+
+
+# ── Export ──────────────────────────────────────────────
+
+@restricted
+async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    events = get_events(update.effective_chat.id)
+    notes = get_notes(update.effective_chat.id)
+    user_tz = get_timezone(update.effective_chat.id)
+
+    msg = "📤 **Your Exported Data**\n\n"
+    msg += f"Timezone: {user_tz}\n\n"
+
+    msg += "─── Dates ───\n"
+    if events:
+        for ev in events:
+            label = "♻️" if ev.get("recurring") else "1️⃣"
+            msg += f"{label} {secure_text(ev['name'])}: {ev['event_date']} at {ev['notify_time']}\n"
+    else:
+        msg += "(none)\n"
+
+    msg += "\n─── Notes ───\n"
+    if notes:
+        for n in notes:
+            msg += f"📌 {secure_text(n['title'])}"
+            if n["content"]:
+                msg += f": {secure_text(n['content'])}"
+            if n["photo_id"]:
+                msg += " [photo]"
+            msg += "\n"
+    else:
+        msg += "(none)\n"
+
+    await update.message.reply_text(
+        msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard()
+    )
 
 
 # ── Delete ──────────────────────────────────────────────
@@ -427,7 +614,6 @@ async def delete_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return DELETE_CHOICE
 
-    # Try parsing as an ID number
     try:
         item_id = int(text)
         delete_type = context.user_data.get("delete_type")
@@ -456,7 +642,176 @@ async def delete_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return DELETE_CHOICE
 
 
-# ── Edit ────────────────────────────────────────────────
+# ── Inline Delete callbacks ─────────────────────────────
+
+async def inline_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show confirmation inline when user presses [Del] on a list item."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    item_type = parts[1]
+    item_id = int(parts[2])
+
+    await query.edit_message_text(
+        text=f"Delete this {item_type}?",
+        reply_markup=build_confirm_delete_inline(item_type, item_id),
+    )
+
+
+async def inline_delete_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Execute the delete after user confirms."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    item_type = parts[1]
+    item_id = int(parts[2])
+    chat_id = update.effective_chat.id
+
+    if item_type == "event":
+        ok = delete_event(chat_id, item_id)
+    else:
+        ok = delete_note(chat_id, item_id)
+
+    if ok:
+        await query.edit_message_text("✅ Deleted.")
+    else:
+        await query.edit_message_text("❌ Could not delete. Item may already be gone.")
+
+
+async def inline_delete_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel a pending inline delete."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Cancelled.")
+
+
+# ── Inline Edit callbacks ───────────────────────────────
+
+async def inline_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry: user pressed [Edit] on a list item. Show field selection."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    item_type = parts[1]
+    item_id = int(parts[2])
+    chat_id = update.effective_chat.id
+
+    context.user_data["inline_edit_type"] = item_type
+    context.user_data["inline_edit_id"] = item_id
+
+    if item_type == "event":
+        ev = get_event(chat_id, item_id)
+        if not ev:
+            await query.edit_message_text("Item not found.")
+            return ConversationHandler.END
+        context.user_data["inline_edit_current"] = {
+            "Name": ev["name"],
+            "Date": ev["event_date"],
+            "Time": ev["notify_time"],
+            "Recurring": "Yes" if ev.get("recurring") else "No",
+        }
+        text = f"Edit <b>{secure_text(ev['name'])}</b> — what field?"
+    else:
+        note = get_note(chat_id, item_id)
+        if not note:
+            await query.edit_message_text("Item not found.")
+            return ConversationHandler.END
+        context.user_data["inline_edit_current"] = {
+            "Title": note["title"],
+            "Content": note["content"],
+        }
+        text = f"Edit <b>{secure_text(note['title'])}</b> — what field?"
+
+    await query.edit_message_text(
+        text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=build_edit_field_inline(item_type, item_id),
+    )
+    return INLINE_AWAIT_FIELD
+
+
+async def inline_field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User selected a field to edit. Prompt for new value."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    field = parts[3]
+    context.user_data["inline_edit_field"] = field
+
+    current = context.user_data.get("inline_edit_current", {}).get(field, "Unknown")
+
+    if field == "Recurring":
+        await query.edit_message_text(
+            f"Currently: <b>{current}</b>\n\n"
+            "Send <b>Yes</b> for recurring or <b>No</b> for one-time.",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await query.edit_message_text(
+            f"Currently: <b>{secure_text(str(current))}</b>\n\n"
+            "Reply with the new value, or send a photo if editing content:",
+            parse_mode=ParseMode.HTML,
+        )
+
+    return INLINE_AWAIT_VALUE
+
+
+async def inline_save_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Capture the new value and save the edit."""
+    field = context.user_data["inline_edit_field"]
+    item_id = context.user_data["inline_edit_id"]
+    item_type = context.user_data["inline_edit_type"]
+    chat_id = update.effective_chat.id
+
+    if update.message.photo and item_type == "note" and field == "Content":
+        photo_id = update.message.photo[-1].file_id
+        caption = update.message.caption or ""
+        update_note(chat_id, item_id, "Content", caption, photo_id=photo_id)
+    else:
+        new_value = update.message.text or ""
+        if item_type == "event":
+            if field == "Date":
+                try:
+                    datetime.strptime(new_value, "%d-%m-%Y")
+                except ValueError:
+                    await update.message.reply_text(
+                        "Invalid Date Format. Use DD-MM-YYYY.",
+                        reply_markup=get_back_keyboard(),
+                    )
+                    return INLINE_AWAIT_VALUE
+            elif field == "Time":
+                try:
+                    datetime.strptime(new_value, "%H:%M")
+                except ValueError:
+                    await update.message.reply_text(
+                        "Invalid Time Format. Use HH:MM.",
+                        reply_markup=get_back_keyboard(),
+                    )
+                    return INLINE_AWAIT_VALUE
+            update_event(chat_id, item_id, field, new_value)
+        else:
+            update_note(chat_id, item_id, field, new_value)
+
+    await update.message.reply_text(
+        f"✅ <b>{field}</b> updated.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_keyboard(),
+    )
+    return ConversationHandler.END
+
+
+async def inline_edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Edit cancelled.")
+    return ConversationHandler.END
+
+
+# ── Edit (reply-keyboard based) ─────────────────────────
 
 @restricted
 async def edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -520,6 +875,7 @@ async def edit_select_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Name": ev["name"],
             "Date": ev["event_date"],
             "Time": ev["notify_time"],
+            "Recurring": "Yes" if ev.get("recurring") else "No",
         }
         await update.message.reply_text(
             f"Found Date: <b>{secure_text(ev['name'])}</b>\nWhat do you want to change?",
@@ -553,12 +909,20 @@ async def edit_select_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current_val = context.user_data["current_values"].get(field, "Unknown")
 
-    await update.message.reply_text(
-        f"Current <b>{field}</b> is: {secure_text(str(current_val))}\n\n"
-        "Please enter the new value:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_back_keyboard(),
-    )
+    if field == "Recurring":
+        await update.message.reply_text(
+            f"Currently: <b>{current_val}</b>\n\n"
+            "Reply <b>Yes</b> for recurring or <b>No</b> for one-time.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            f"Current <b>{field}</b> is: {secure_text(str(current_val))}\n\n"
+            "Please enter the new value:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
     return EDIT_NEW_VALUE
 
 
@@ -570,7 +934,7 @@ async def edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data["edit_type"] == "event":
         if field == "Name":
-            pass  # no format validation needed
+            pass
         elif field == "Date":
             try:
                 datetime.strptime(new_value, "%d-%m-%Y")
@@ -589,6 +953,8 @@ async def edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=get_back_keyboard(),
                 )
                 return EDIT_NEW_VALUE
+        elif field == "Recurring":
+            pass  # update_event handles the conversion
 
         update_event(chat_id, item_id, field, new_value)
 
@@ -612,31 +978,98 @@ async def edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ── Handler registrars ──────────────────────────────────
+# ── Handler registration ────────────────────────────────
 
-TEXT_FILTER = filters.TEXT & ~filters.COMMAND & ~filters.Regex("^\U0001f519 Back$")
+MENU_BUTTONS = (
+    r"^🔙 Back$"
+    r"|^📅 List Dates$"
+    r"|^📝 View Notes$"
+    r"|^❤️ Our Journey$"
+    r"|^🌍 Set Timezone$"
+    r"|^➕ Add Date$"
+    r"|^➕ Add Note$"
+    r"|^✏️ Edit (Date|Note)$"
+    r"|^🗑 Delete Item$"
+    r"|^🔍 Upcoming$"
+    r"|^❓ Help$"
+    r"|^📤 Export$"
+    r"|^⚙️ Journey Event$"
+    r"|^Yes \(Recurring\)$"
+    r"|^No \(One-time\)$"
+    r"|^Delete Date$"
+    r"|^Delete Note$"
+)
+
+TEXT_FILTER = filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS)
 
 
 def register_handlers(application):
     """Attach all command and conversation handlers to the application."""
 
+    # Commands and menu buttons
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex("^\U0001f4c5 List Dates$"), list_events))
-    application.add_handler(MessageHandler(filters.Regex("^\U0001f4dd View Notes$"), list_notes))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("upcoming", upcoming))
+    application.add_handler(CommandHandler("export", export_data))
+    application.add_handler(MessageHandler(filters.Regex("^❓ Help$"), help_command))
+    application.add_handler(MessageHandler(filters.Regex("^📅 List Dates$"), list_events))
+    application.add_handler(MessageHandler(filters.Regex("^📝 View Notes$"), list_notes))
     application.add_handler(MessageHandler(filters.Regex("^❤️ Our Journey$"), our_journey))
+    application.add_handler(MessageHandler(filters.Regex("^🔍 Upcoming$"), upcoming))
+    application.add_handler(MessageHandler(filters.Regex("^📤 Export$"), export_data))
+
+    # Inline delete callbacks (standalone, not in a conversation)
+    application.add_handler(CallbackQueryHandler(inline_delete_confirm, pattern=r"^del\|"))
+    application.add_handler(CallbackQueryHandler(inline_delete_execute, pattern=r"^confirm_del\|"))
+    application.add_handler(CallbackQueryHandler(inline_delete_cancel, pattern=r"^cancel_del$"))
+
+    # Inline edit conversation
+    application.add_handler(ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(inline_edit_start, pattern=r"^edit\|"),
+        ],
+        states={
+            INLINE_AWAIT_FIELD: [
+                CallbackQueryHandler(inline_field_select, pattern=r"^field\|"),
+            ],
+            INLINE_AWAIT_VALUE: [
+                MessageHandler((TEXT_FILTER | filters.PHOTO), inline_save_value),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(inline_edit_cancel, pattern=r"^cancel_edit$"),
+            CommandHandler("cancel", back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
+        ],
+    ))
 
     # Timezone
     application.add_handler(ConversationHandler(
         entry_points=[
             CommandHandler("timezone", timezone_start),
-            MessageHandler(filters.Regex("^\U0001f30d Set Timezone$"), timezone_start),
+            MessageHandler(filters.Regex(r"^🌍 Set Timezone$"), timezone_start),
         ],
         states={
             SET_TIMEZONE: [MessageHandler(TEXT_FILTER, save_timezone)],
         },
         fallbacks=[
             CommandHandler("cancel", back_to_menu),
-            MessageHandler(filters.Regex("^\U0001f519 Back$"), back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
+        ],
+    ))
+
+    # Journey event config
+    application.add_handler(ConversationHandler(
+        entry_points=[
+            CommandHandler("journey", journey_event_start),
+            MessageHandler(filters.Regex(r"^⚙️ Journey Event$"), journey_event_start),
+        ],
+        states={
+            JOURNEY_EVENT_STATE: [MessageHandler(TEXT_FILTER, save_journey_event)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
         ],
     ))
 
@@ -644,16 +1077,17 @@ def register_handlers(application):
     application.add_handler(ConversationHandler(
         entry_points=[
             CommandHandler("add", add_event_start),
-            MessageHandler(filters.Regex("^➕ Add Date$"), add_event_start),
+            MessageHandler(filters.Regex(r"^➕ Add Date$"), add_event_start),
         ],
         states={
             NAME: [MessageHandler(TEXT_FILTER, get_name)],
             DATE: [MessageHandler(TEXT_FILTER, get_date)],
             TIME: [MessageHandler(TEXT_FILTER, get_time)],
+            RECURRING: [MessageHandler(TEXT_FILTER, get_recurring)],
         },
         fallbacks=[
             CommandHandler("cancel", back_to_menu),
-            MessageHandler(filters.Regex("^\U0001f519 Back$"), back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
         ],
     ))
 
@@ -661,7 +1095,7 @@ def register_handlers(application):
     application.add_handler(ConversationHandler(
         entry_points=[
             CommandHandler("addnote", add_note_start),
-            MessageHandler(filters.Regex("^➕ Add Note$"), add_note_start),
+            MessageHandler(filters.Regex(r"^➕ Add Note$"), add_note_start),
         ],
         states={
             NOTE_TITLE: [MessageHandler(TEXT_FILTER, get_note_title)],
@@ -671,7 +1105,7 @@ def register_handlers(application):
         },
         fallbacks=[
             CommandHandler("cancel", back_to_menu),
-            MessageHandler(filters.Regex("^\U0001f519 Back$"), back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
         ],
     ))
 
@@ -679,19 +1113,19 @@ def register_handlers(application):
     application.add_handler(ConversationHandler(
         entry_points=[
             CommandHandler("delete", delete_start),
-            MessageHandler(filters.Regex("^\U0001f5d1 Delete Item$"), delete_start),
+            MessageHandler(filters.Regex(r"^🗑 Delete Item$"), delete_start),
         ],
         states={DELETE_CHOICE: [MessageHandler(TEXT_FILTER, delete_router)]},
         fallbacks=[
             CommandHandler("cancel", back_to_menu),
-            MessageHandler(filters.Regex("^\U0001f519 Back$"), back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
         ],
     ))
 
-    # Edit
+    # Edit (reply-keyboard based)
     application.add_handler(ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^✏️ Edit (Date|Note)$"), edit_start),
+            MessageHandler(filters.Regex(r"^✏️ Edit (Date|Note)$"), edit_start),
         ],
         states={
             EDIT_SELECT_ID: [MessageHandler(TEXT_FILTER, edit_select_id)],
@@ -702,7 +1136,7 @@ def register_handlers(application):
         },
         fallbacks=[
             CommandHandler("cancel", back_to_menu),
-            MessageHandler(filters.Regex("^\U0001f519 Back$"), back_to_menu),
+            MessageHandler(filters.Regex(r"^🔙 Back$"), back_to_menu),
         ],
     ))
 
