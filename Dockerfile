@@ -11,8 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of your code into the container
-COPY main.py .
-COPY .env .
+COPY . .
 
 # (Optional) If you have an existing database, copy it. 
 # If not, the bot will create one.
