@@ -2,7 +2,6 @@
 
 import logging
 import sqlite3
-import time
 from contextlib import contextmanager
 from typing import Optional
 
@@ -25,25 +24,14 @@ NOTE_FIELDS = {
 
 @contextmanager
 def get_db():
-    """Connection context manager with retry on SQLITE_BUSY."""
-    conn = None
-    for attempt in range(3):
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            conn.row_factory = sqlite3.Row
-            yield conn
-            return
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e).lower() or "busy" in str(e).lower():
-                if conn:
-                    conn.close()
-                if attempt < 2:
-                    time.sleep(0.1 * (attempt + 1))
-                    continue
-            raise
-        finally:
-            if conn:
-                conn.close()
+    """Connection context manager with SQLite busy timeout configured."""
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=10000")
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db():
@@ -183,11 +171,14 @@ def update_event(chat_id: int, event_id: int, field: str, value: str) -> bool:
 
     if column == "recurring":
         value = "1" if value.lower() in ("yes", "true", "1", "y", "recurring") else "0"
-        max_len = 1
     elif column == "name":
         value = _truncate(value, MAX_INPUT_LENGTH)
-    else:
+    elif column == "event_date":
+        value = _truncate(value, 10)
+    elif column == "notify_time":
         value = _truncate(value, 5)
+    else:
+        raise ValueError(f"Unexpected event column: {column}")
 
     assert column in ("name", "event_date", "notify_time", "recurring"), \
         f"Unexpected column: {column}"

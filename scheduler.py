@@ -1,6 +1,7 @@
 """Background scheduler for reminder notifications with gap protection."""
 
 import logging
+import html
 from datetime import datetime, timedelta, timezone as dt_timezone
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,16 +21,28 @@ INITIAL_LOOKBACK = timedelta(minutes=5)
 
 def _build_message(name: str, days_until: int) -> str | None:
     """Build a reminder message based on how far away the event is."""
+    safe_name = html.escape(str(name))
     if days_until == 30:
-        return f"\U0001f514 Head's up! <b>{name}</b> is in 1 month."
+        return f"\U0001f514 Head's up! <b>{safe_name}</b> is in 1 month."
     if 0 < days_until < 30 and days_until % 7 == 0:
         weeks = days_until // 7
-        return f"⏰ Reminder: <b>{name}</b> is in {weeks} week(s)."
+        label = "week" if weeks == 1 else "weeks"
+        return f"⏰ Reminder: <b>{safe_name}</b> is in {weeks} {label}."
     if days_until == 1:
-        return f"\U0001f631 Get ready! <b>{name}</b> is TOMORROW!"
+        return f"\U0001f631 Get ready! <b>{safe_name}</b> is TOMORROW!"
     if days_until == 0:
-        return f"\U0001f389 Today is the day! Happy <b>{name}</b>!"
+        return f"\U0001f389 Today is the day! Happy <b>{safe_name}</b>!"
     return None
+
+
+def _project_year_safe(event_dt, year):
+    """Project a recurring date into a year, using Feb 28 for leap-day events."""
+    try:
+        return event_dt.replace(year=year)
+    except ValueError:
+        if event_dt.month == 2 and event_dt.day == 29:
+            return event_dt.replace(year=year, day=28)
+        raise
 
 
 def _get_last_check() -> datetime:
@@ -105,13 +118,17 @@ async def _check_single_event(application, row, utc_now, last_check):
         return
 
     # Parse event date and calculate days_until
-    event_dt = datetime.strptime(date_str, "%d-%m-%Y").date()
+    try:
+        event_dt = datetime.strptime(date_str, "%d-%m-%Y").date()
+    except ValueError:
+        logger.warning("Malformed event_date '%s' for event '%s' in chat %s", date_str, name, chat_id)
+        return
     user_today = user_now.date()
 
     if recurring:
-        this_year_event = event_dt.replace(year=user_today.year)
+        this_year_event = _project_year_safe(event_dt, user_today.year)
         if this_year_event < user_today:
-            this_year_event = event_dt.replace(year=user_today.year + 1)
+            this_year_event = _project_year_safe(event_dt, user_today.year + 1)
         days_until = (this_year_event - user_today).days
     else:
         # Non-recurring: use actual date, don't wrap
