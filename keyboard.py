@@ -1,5 +1,8 @@
 """Keyboard layouts for the bot."""
 
+import calendar
+from datetime import date
+
 from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 
@@ -31,8 +34,10 @@ def get_back_keyboard() -> ReplyKeyboardMarkup:
 
 def get_timezone_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        [KeyboardButton("Asia/Singapore"), KeyboardButton("UTC")],
-        [KeyboardButton("US/Eastern"), KeyboardButton("Europe/London")],
+        [KeyboardButton("Asia/Singapore"), KeyboardButton("Asia/Tokyo"), KeyboardButton("Asia/Kolkata")],
+        [KeyboardButton("Europe/London"), KeyboardButton("Europe/Berlin"), KeyboardButton("Europe/Paris")],
+        [KeyboardButton("US/Eastern"), KeyboardButton("US/Central"), KeyboardButton("US/Pacific")],
+        [KeyboardButton("Australia/Sydney"), KeyboardButton("UTC")],
         [KeyboardButton("🔙 Back")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -49,7 +54,7 @@ def get_delete_choice_keyboard() -> ReplyKeyboardMarkup:
 def get_event_field_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton("Name"), KeyboardButton("Date"), KeyboardButton("Time")],
-        [KeyboardButton("Recurring")],
+        [KeyboardButton("Recurring"), KeyboardButton("Reminders")],
         [KeyboardButton("🔙 Back")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -85,7 +90,7 @@ def build_event_list_inline(events: list[dict]) -> InlineKeyboardMarkup | None:
                 callback_data=f"edit|event|{ev['id']}",
             ),
             InlineKeyboardButton(
-                f"🗑 Del",
+                "🗑 Del",
                 callback_data=f"del|event|{ev['id']}",
             ),
         ]
@@ -105,12 +110,20 @@ def build_note_list_inline(notes: list[dict]) -> InlineKeyboardMarkup | None:
                 callback_data=f"edit|note|{note['id']}",
             ),
             InlineKeyboardButton(
-                f"🗑 Del",
+                "🗑 Del",
                 callback_data=f"del|note|{note['id']}",
             ),
         ]
         buttons.append(row)
     return InlineKeyboardMarkup(buttons)
+
+
+def build_photo_note_inline(note: dict) -> InlineKeyboardMarkup:
+    """Edit/Delete buttons attached to a single photo note message."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✏️ Edit", callback_data=f"edit|note|{note['id']}"),
+        InlineKeyboardButton("🗑 Del", callback_data=f"del|note|{note['id']}"),
+    ]])
 
 
 # ── Inline keyboards for inline actions ────────────────
@@ -148,6 +161,7 @@ def build_edit_field_inline(item_type: str, item_id: int) -> InlineKeyboardMarku
             [InlineKeyboardButton("Date", callback_data=f"field|event|{item_id}|Date")],
             [InlineKeyboardButton("Time", callback_data=f"field|event|{item_id}|Time")],
             [InlineKeyboardButton("Recurring", callback_data=f"field|event|{item_id}|Recurring")],
+            [InlineKeyboardButton("Reminders", callback_data=f"field|event|{item_id}|Reminders")],
         ]
     else:
         buttons = [
@@ -156,3 +170,48 @@ def build_edit_field_inline(item_type: str, item_id: int) -> InlineKeyboardMarku
         ]
     buttons.append([InlineKeyboardButton("Cancel", callback_data="cancel_edit")])
     return InlineKeyboardMarkup(buttons)
+
+
+def build_snooze_inline(event_id: int) -> InlineKeyboardMarkup:
+    """Snooze button attached to reminder messages."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("⏰ Snooze 1h", callback_data=f"snz|{event_id}"),
+    ]])
+
+
+# ── Inline calendar date picker ─────────────────────────
+
+def build_calendar_inline(year: int, month: int) -> InlineKeyboardMarkup:
+    """Month-view calendar. Day press → cal|pick|Y|M|D, nav → cal|nav|Y|M."""
+    header = [InlineKeyboardButton(
+        f"{calendar.month_name[month]} {year}", callback_data="cal|noop"
+    )]
+
+    weekday_row = [
+        InlineKeyboardButton(d, callback_data="cal|noop")
+        for d in ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+    ]
+
+    day_rows = []
+    for week in calendar.monthcalendar(year, month):
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="cal|noop"))
+            else:
+                row.append(InlineKeyboardButton(
+                    str(day), callback_data=f"cal|pick|{year}|{month}|{day}"
+                ))
+        day_rows.append(row)
+
+    prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
+    nav_row = [
+        InlineKeyboardButton("«", callback_data=f"cal|nav|{year - 1}|{month}"),
+        InlineKeyboardButton("‹", callback_data=f"cal|nav|{prev_y}|{prev_m}"),
+        InlineKeyboardButton("Today", callback_data=f"cal|nav|{date.today().year}|{date.today().month}"),
+        InlineKeyboardButton("›", callback_data=f"cal|nav|{next_y}|{next_m}"),
+        InlineKeyboardButton("»", callback_data=f"cal|nav|{year + 1}|{month}"),
+    ]
+
+    return InlineKeyboardMarkup([header, weekday_row, *day_rows, nav_row])

@@ -2,6 +2,7 @@
 
 import logging
 
+from telegram import Update
 from telegram.ext import Application
 
 from config import TOKEN
@@ -38,7 +39,9 @@ def main():
     register_handlers(application)
 
     logger.info("Bot is running...")
-    application.run_polling()
+    application.run_polling(
+        allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY],
+    )
 
 
 if __name__ == "__main__":

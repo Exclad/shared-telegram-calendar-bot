@@ -1,19 +1,26 @@
-"""Database operations with connection safety, retry logic, and parameterized queries."""
+"""Database operations with connection safety, retry logic, and parameterized queries.
+
+Event dates are stored as ISO ``YYYY-MM-DD`` strings. ``migrate()`` converts
+legacy ``DD-MM-YYYY`` rows in place.
+"""
 
 import logging
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from config import DB_PATH, MAX_INPUT_LENGTH, MAX_NOTE_CONTENT_LENGTH
+from config import DB_PATH, DEFAULT_JOURNEY_EVENT, MAX_INPUT_LENGTH, MAX_NOTE_CONTENT_LENGTH
+from utils import parse_iso_date, parse_reminder_days, parse_recurring, parse_time_hhmm
 
 EVENT_FIELDS = {
     "Name": "name",
     "Date": "event_date",
     "Time": "notify_time",
     "Recurring": "recurring",
+    "Reminders": "reminder_days",
 }
 
 NOTE_FIELDS = {
@@ -70,6 +77,8 @@ def init_db():
                 value TEXT NOT NULL
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_chat ON events(chat_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_chat ON notes(chat_id)")
         conn.commit()
 
 
@@ -84,11 +93,48 @@ def migrate():
         if "recurring" not in columns:
             cursor.execute("ALTER TABLE events ADD COLUMN recurring BOOLEAN DEFAULT 1")
 
-        # user_settings.journey_event
+        # events.reminder_days — optional per-event schedule ("30,7,1,0")
+        if "reminder_days" not in columns:
+            cursor.execute("ALTER TABLE events ADD COLUMN reminder_days TEXT")
+
+        # user_settings.journey_event (legacy, name-based) and journey_event_id
         cursor.execute("PRAGMA table_info(user_settings)")
         us_cols = {col[1] for col in cursor.fetchall()}
         if "journey_event" not in us_cols:
             cursor.execute("ALTER TABLE user_settings ADD COLUMN journey_event TEXT")
+        if "journey_event_id" not in us_cols:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN journey_event_id INTEGER")
+
+        # Legacy DD-MM-YYYY dates → ISO YYYY-MM-DD
+        cursor.execute("SELECT id, event_date FROM events")
+        for row in cursor.fetchall():
+            raw = row["event_date"]
+            if parse_iso_date(raw):
+                continue
+            try:
+                iso = datetime.strptime(raw, "%d-%m-%Y").date().isoformat()
+            except ValueError:
+                logger.warning("Unparseable legacy event_date %r (id=%s); left as-is", raw, row["id"])
+                continue
+            cursor.execute("UPDATE events SET event_date = ? WHERE id = ?", (iso, row["id"]))
+
+        # Resolve legacy name-based journey settings to event ids
+        cursor.execute(
+            "SELECT chat_id, journey_event FROM user_settings "
+            "WHERE journey_event IS NOT NULL AND journey_event_id IS NULL"
+        )
+        for row in cursor.fetchall():
+            cursor.execute(
+                "SELECT id FROM events WHERE chat_id = ? AND name = ? COLLATE NOCASE "
+                "ORDER BY id LIMIT 1",
+                (row["chat_id"], row["journey_event"]),
+            )
+            ev = cursor.fetchone()
+            if ev:
+                cursor.execute(
+                    "UPDATE user_settings SET journey_event_id = ? WHERE chat_id = ?",
+                    (ev["id"], row["chat_id"]),
+                )
 
         conn.commit()
 
@@ -127,14 +173,17 @@ def set_system_setting(key: str, value: str):
 # ── Events ──────────────────────────────────────────────
 
 def add_event(chat_id: int, name: str, event_date: str, notify_time: str,
-              recurring: bool = True) -> int:
+              recurring: bool = True, reminder_days: Optional[str] = None) -> int:
+    """Insert an event. ``event_date`` must be an ISO YYYY-MM-DD string."""
     name = _truncate(name, MAX_INPUT_LENGTH)
+    if not parse_iso_date(event_date):
+        raise ValueError(f"event_date must be ISO YYYY-MM-DD, got {event_date!r}")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO events (chat_id, name, event_date, notify_time, recurring) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (chat_id, name, event_date, notify_time, int(recurring)),
+            "INSERT INTO events (chat_id, name, event_date, notify_time, recurring, reminder_days) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, name, event_date, notify_time, int(recurring), reminder_days),
         )
         conn.commit()
         return cursor.lastrowid
@@ -144,8 +193,8 @@ def get_events(chat_id: int) -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, event_date, notify_time, recurring FROM events "
-            "WHERE chat_id = ? ORDER BY id",
+            "SELECT id, name, event_date, notify_time, recurring, reminder_days "
+            "FROM events WHERE chat_id = ? ORDER BY id",
             (chat_id,),
         )
         return [dict(row) for row in cursor.fetchall()]
@@ -155,8 +204,8 @@ def get_event(chat_id: int, event_id: int) -> Optional[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, event_date, notify_time, recurring FROM events "
-            "WHERE id = ? AND chat_id = ?",
+            "SELECT id, name, event_date, notify_time, recurring, reminder_days "
+            "FROM events WHERE id = ? AND chat_id = ?",
             (event_id, chat_id),
         )
         row = cursor.fetchone()
@@ -164,24 +213,39 @@ def get_event(chat_id: int, event_id: int) -> Optional[dict]:
 
 
 def update_event(chat_id: int, event_id: int, field: str, value: str) -> bool:
-    """Update an event field by display name. Returns True if a row was changed."""
+    """Update an event field by display name. Returns True if a row was changed.
+
+    Values are validated strictly; invalid values raise ValueError. ``Date``
+    must already be an ISO YYYY-MM-DD string (handlers convert user input).
+    """
     column = EVENT_FIELDS.get(field)
     if not column:
         raise ValueError(f"Invalid event field: {field}")
 
     if column == "recurring":
-        value = "1" if value.lower() in ("yes", "true", "1", "y", "recurring") else "0"
+        parsed = parse_recurring(value)
+        if parsed is None:
+            raise ValueError(f"Invalid recurring value: {value!r}")
+        value = "1" if parsed else "0"
     elif column == "name":
-        value = _truncate(value, MAX_INPUT_LENGTH)
+        value = _truncate(value.strip(), MAX_INPUT_LENGTH)
+        if not value:
+            raise ValueError("Event name cannot be empty")
     elif column == "event_date":
-        value = _truncate(value, 10)
+        if not parse_iso_date(value):
+            raise ValueError(f"Invalid ISO date: {value!r}")
     elif column == "notify_time":
-        value = _truncate(value, 5)
+        normalized = parse_time_hhmm(value)
+        if not normalized:
+            raise ValueError(f"Invalid time: {value!r}")
+        value = normalized
+    elif column == "reminder_days":
+        days = parse_reminder_days(value)
+        if days is None:
+            raise ValueError(f"Invalid reminder days: {value!r}")
+        value = ",".join(str(d) for d in days)
     else:
         raise ValueError(f"Unexpected event column: {column}")
-
-    assert column in ("name", "event_date", "notify_time", "recurring"), \
-        f"Unexpected column: {column}"
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -246,10 +310,12 @@ def update_note(chat_id: int, note_id: int, field: str, value: str,
     column = NOTE_FIELDS.get(field)
     if not column:
         raise ValueError(f"Invalid note field: {field}")
-    max_len = MAX_INPUT_LENGTH if column == "title" else MAX_NOTE_CONTENT_LENGTH
-    value = _truncate(value, max_len)
-
-    assert column in ("title", "content"), f"Unexpected column: {column}"
+    if column == "title":
+        value = _truncate(value.strip(), MAX_INPUT_LENGTH)
+        if not value:
+            raise ValueError("Note title cannot be empty")
+    else:
+        value = _truncate(value, MAX_NOTE_CONTENT_LENGTH)
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -303,6 +369,7 @@ def set_timezone(chat_id: int, timezone: str):
 
 
 def get_journey_event(chat_id: int) -> str:
+    """Return the configured journey event *name* (for display)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -310,21 +377,21 @@ def get_journey_event(chat_id: int) -> str:
             (chat_id,),
         )
         row = cursor.fetchone()
-        return row["journey_event"] if row and row["journey_event"] else "Anniversary"
+        return row["journey_event"] if row and row["journey_event"] else DEFAULT_JOURNEY_EVENT
 
 
-def set_journey_event(chat_id: int, event_name: str):
+def set_journey_event(chat_id: int, event_id: int, event_name: str):
+    """Store the journey event by id (name kept for display/fallback)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE user_settings SET journey_event = ? WHERE chat_id = ?",
-            (event_name, chat_id),
+            "INSERT INTO user_settings (chat_id, timezone, journey_event, journey_event_id) "
+            "VALUES (?, 'UTC', ?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET "
+            "journey_event = excluded.journey_event, "
+            "journey_event_id = excluded.journey_event_id",
+            (chat_id, event_name, event_id),
         )
-        if cursor.rowcount == 0:
-            cursor.execute(
-                "INSERT INTO user_settings (chat_id, timezone, journey_event) VALUES (?, 'UTC', ?)",
-                (chat_id, event_name),
-            )
         conn.commit()
 
 
@@ -334,21 +401,43 @@ def get_all_events_with_timezone() -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT e.chat_id, e.name, e.event_date, e.notify_time, e.recurring, u.timezone
+            SELECT e.id, e.chat_id, e.name, e.event_date, e.notify_time,
+                   e.recurring, e.reminder_days, u.timezone
             FROM events e
             LEFT JOIN user_settings u ON e.chat_id = u.chat_id
         """)
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_journey_event_for_chat(chat_id: int) -> tuple[Optional[str], Optional[str]]:
-    """Return (event_date, event_name) for the chat's configured journey event."""
-    event_name = get_journey_event(chat_id)
+def get_journey_event_for_chat(chat_id: int) -> tuple[Optional[str], str]:
+    """Return (event_date_iso, event_name) for the chat's journey event.
+
+    Resolution order: configured event id → exact (case-insensitive) match on
+    the configured/default name. Returns (None, name) if nothing matches.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT event_date FROM events WHERE chat_id = ? AND name LIKE ? LIMIT 1",
-            (chat_id, f"{event_name}%"),
+            "SELECT journey_event, journey_event_id FROM user_settings WHERE chat_id = ?",
+            (chat_id,),
+        )
+        settings = cursor.fetchone()
+        name = (settings["journey_event"] if settings and settings["journey_event"]
+                else DEFAULT_JOURNEY_EVENT)
+
+        if settings and settings["journey_event_id"]:
+            cursor.execute(
+                "SELECT name, event_date FROM events WHERE id = ? AND chat_id = ?",
+                (settings["journey_event_id"], chat_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row["event_date"], row["name"]
+
+        cursor.execute(
+            "SELECT name, event_date FROM events "
+            "WHERE chat_id = ? AND name = ? COLLATE NOCASE ORDER BY id LIMIT 1",
+            (chat_id, name),
         )
         row = cursor.fetchone()
-        return (row["event_date"], event_name) if row else (None, event_name)
+        return (row["event_date"], row["name"]) if row else (None, name)
