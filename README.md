@@ -4,7 +4,7 @@ A private Telegram bot for couples to track important dates, share notes (text &
 
 ## ✨ Features
 
-- **📅 Events with reminders:** Add recurring (yearly) or one-time events. Get notified 1 month, 2-4 weeks, 1 day, and on the day — or set a custom per-event schedule.
+- **📅 Events with reminders:** Add recurring (yearly) or one-time events. Get notified 1 week, 1 day, and on the day — or set a custom per-event schedule.
 - **🗓 Inline calendar picker:** Pick dates from a tappable calendar, or type them in several formats (`17-09-2022`, `17/09/2022`, `2022-09-17`, `17 Sep 2022`).
 - **⏰ Snooze:** Every reminder has a "Snooze 1h" button.
 - **🌍 Timezone support:** Each chat sets its own timezone. Reminders fire at the correct local time.
@@ -73,6 +73,12 @@ The `.env` and `dates.db` are excluded from the Docker image via `.dockerignore`
 The image includes a `HEALTHCHECK` that flags the container unhealthy if the
 reminder loop hasn't run in the last 5 minutes.
 
+The bot logs transient Telegram polling network retries at debug level and
+warns if they persist, at most once every 5 minutes. A polling conflict warning
+also appears at most once every 5 minutes with Telegram's error details; check
+for another bot instance or a configured webhook. Network errors while handling
+updates or reminder jobs remain warnings, and unexpected errors remain errors.
+
 ## 📱 How to Use
 
 1. Create a Telegram group with your partner, or use the bot in a private chat.
@@ -105,14 +111,13 @@ By default, the bot sends reminders at the configured notification time on these
 
 | Days until event | Message |
 |-----------------|---------|
-| 30 | "Head's up! X is in 1 month." |
-| 28, 21, 14, 7 | "Reminder: X is in N week(s)." |
+| 7 | "Reminder: X is in 1 week." |
 | 1 | "Get ready! X is TOMORROW!" |
 | 0 | "Today is the day! Happy X!" (with a year count for anniversaries) |
 
 **Custom schedules:** edit an event's **Reminders** field with comma-separated
 day offsets, e.g. `30,7,1,0` (0 = on the day). Any offset works — `10` sends
-"X is in 10 days."
+"X is in 10 days." Existing custom schedules are kept when defaults change.
 
 ## 🧪 Tests
 

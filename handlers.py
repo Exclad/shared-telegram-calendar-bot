@@ -94,6 +94,13 @@ logger = logging.getLogger(__name__)
 TELEGRAM_MSG_LIMIT = 4000  # a little under the hard 4096 cap
 MAX_PHOTO_NOTES_PER_VIEW = 10
 PER_PAGE = 5
+CONFLICT_WARNING_COOLDOWN = 300
+_last_conflict_warning: float | None = None
+POLLING_NETWORK_WARNING_INTERVAL = 300
+POLLING_NETWORK_RECOVERY_GAP = 120
+_polling_network_error_since: float | None = None
+_last_polling_network_error: float | None = None
+_last_polling_network_warning: float | None = None
 
 
 def secure_text(value: str) -> str:
@@ -139,14 +146,42 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     error = context.error
 
     if isinstance(error, Conflict):
-        logger.warning(
-            "Conflict error: another bot instance is polling. "
-            "This instance will reconnect automatically."
-        )
+        global _last_conflict_warning
+        now = time_mod.monotonic()
+        if (_last_conflict_warning is None
+                or now - _last_conflict_warning >= CONFLICT_WARNING_COOLDOWN):
+            logger.warning(
+                "Telegram polling conflict: another getUpdates poller may be using this token, "
+                "or a webhook may be configured. Check the Telegram conflict details: %s",
+                error,
+            )
+            _last_conflict_warning = now
         return
 
     if isinstance(error, NetworkError):
-        logger.warning("Network error (will retry): %s", error)
+        if update is None and getattr(context, "job", None) is None:
+            global _polling_network_error_since, _last_polling_network_error
+            global _last_polling_network_warning
+            now = time_mod.monotonic()
+            if (_polling_network_error_since is None
+                    or _last_polling_network_error is None
+                    or now - _last_polling_network_error >= POLLING_NETWORK_RECOVERY_GAP):
+                _polling_network_error_since = now
+                _last_polling_network_warning = None
+                logger.debug("Transient Telegram polling network error (will retry): %s", error)
+            elif (now - _polling_network_error_since >= POLLING_NETWORK_WARNING_INTERVAL
+                    and (_last_polling_network_warning is None
+                         or now - _last_polling_network_warning >= POLLING_NETWORK_WARNING_INTERVAL)):
+                logger.warning(
+                    "Telegram polling network errors have persisted for at least %s seconds; "
+                    "the bot will keep retrying. Last error: %s",
+                    POLLING_NETWORK_WARNING_INTERVAL,
+                    error,
+                )
+                _last_polling_network_warning = now
+            _last_polling_network_error = now
+        else:
+            logger.warning("Telegram network error while processing an update or job: %s", error)
         return
 
     if isinstance(error, Forbidden):

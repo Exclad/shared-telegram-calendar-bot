@@ -166,6 +166,7 @@ class TestComputeDueReminder:
 
 class TestAllowedDays:
     def test_default(self):
+        assert DEFAULT_REMINDER_DAYS == [7, 1, 0]
         assert _allowed_days(make_row()) == DEFAULT_REMINDER_DAYS
 
     def test_custom(self):
