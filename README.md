@@ -34,6 +34,7 @@ ALLOWED_IDS=123456789,987654321
 
 - `TELEGRAM_TOKEN` — Your bot token from BotFather (required).
 - `ALLOWED_IDS` — Comma-separated Telegram user IDs that can use the bot. If empty, no one can interact with it.
+- `DB_PATH` — Optional database path. Defaults to `dates.db`; Compose sets `/data/dates.db`.
 
 ## 🚀 How to Run
 
@@ -44,31 +45,73 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### Method 2: Docker / Portainer (NAS)
+### Method 2: Komodo Stack (recommended for the NAS)
 
-#### Build the image
+The repository includes [compose.yaml](compose.yaml). It builds the Dockerfile on
+its target server and rebuilds on deployment through `pull_policy: build`.
+No published image or separate Komodo Build resource is needed. Use Docker Compose
+v2 with build support, on the same NAS Docker host that holds the existing data.
 
-```bash
-docker build -t shared-telegram-calendar-bot:latest .
+Create a **Stack** using a Git repository, with:
+
+| Setting | Value |
+| --- | --- |
+| Server | Your NAS |
+| Git provider | `github.com` |
+| Repository | `Exclad/shared-telegram-calendar-bot` |
+| Branch | `main` |
+| Run directory | Repository root (`.`) |
+| Compose file | `compose.yaml` |
+
+In the Stack's **Environment**, set the absolute folder containing your current
+`dates.db` and `.env`. For the previously recorded NAS folder:
+
+```env
+BOT_DATA_DIR=/volume2/docker/shared-telegram-calendar-bot
 ```
 
-Or in Portainer: **Images → Build new** — point to the GitHub repo or upload the project folder.
+Confirm that this still matches the running bot's host data folder. Keep it
+outside Komodo's Git checkout so repo refreshes cannot replace live data.
+Your existing `.env` supplies `TELEGRAM_TOKEN` and `ALLOWED_IDS`; do not commit it.
+Compose requires the data folder and `.env` to exist instead of creating a new
+empty path when a mount path is wrong. No inbound ports are needed for polling.
 
-#### Run the container
+**Before the first migration from the old container:**
 
-- **Image:** `shared-telegram-calendar-bot:latest`
-- **Restart policy:** `Always`
-- **Volumes** (bind mounts — critical for data persistence):
-  - Host path: `/path/on/nas/.env` → Container path: `/app/.env`
-  - Host path: `/path/on/nas/dates.db` → Container path: `/app/dates.db`
+1. Stop the old bot and disable its automatic restart. Run only one bot with this token.
+2. Back up the live database and credentials. If the old container only mounts
+   `/app/dates.db`, SQLite `dates.db-wal` and `dates.db-shm` files may be inside that
+   container rather than on the NAS. Preserve the matching database and any
+   sidecars from the stopped deployment before removing it. Resolve/checkpoint
+   that database set before starting the replacement; never mix sidecars from a
+   different database snapshot.
+3. Ensure the existing database is in `BOT_DATA_DIR`. Do not replace it with an old
+   local source-folder snapshot. The directory and database must be writable by
+   uid 1000; the credentials file must be readable by uid 1000.
+4. Deploy the Stack, then check logs, container health, List Dates and View Notes.
 
-The `.env` and `dates.db` are excluded from the Docker image via `.dockerignore` — they must be bind-mounted at runtime.
+The entire data directory is mounted at `/data`, so future WAL/SHM sidecars stay
+with the database across container replacements. The credentials file is also
+mounted read-only at `/app/.env`. Existing deployments that do not set `DB_PATH`
+continue using `/app/dates.db` with the image's default working directory.
 
-> **Note:** For a file bind mount, create an empty `dates.db` on the host before starting a fresh container. The bot creates its tables on first run.
->
-> **Note:** The container runs as a non-root user (uid 1000). Make sure the
-> bind-mounted `dates.db` (and its directory, for SQLite WAL sidecar files)
-> is writable by uid 1000, e.g. `chown 1000 /path/on/nas/dates.db`.
+For later code updates, deploy the Stack from the latest Git commit. Do not force
+image pulling or use registry image-update checks for this locally built image.
+Komodo's Stack documentation: https://komo.do/docs/deploy/compose
+
+### Method 3: Docker Compose from a NAS shell
+
+From a clone of this repository on the NAS, after the same migration precautions:
+
+```sh
+export BOT_DATA_DIR=/volume2/docker/shared-telegram-calendar-bot
+docker compose config --quiet
+docker compose up -d --build
+```
+
+The Dockerfile can also be used with a standalone Docker/Komodo Deployment.
+Configure the same persistent data directory, credentials mount, and `DB_PATH`
+there manually; a Compose file is only needed for the Stack/Compose approach.
 
 The image includes a `HEALTHCHECK` that flags the container unhealthy if the
 reminder loop hasn't run in the last 5 minutes.

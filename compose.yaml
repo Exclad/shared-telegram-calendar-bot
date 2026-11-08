@@ -1,0 +1,23 @@
+services:
+  calendar-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: shared-telegram-calendar-bot:komodo
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DB_PATH: /data/dates.db
+    volumes:
+      - type: bind
+        source: "${BOT_DATA_DIR:?Set BOT_DATA_DIR to the existing NAS bot data directory}"
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${BOT_DATA_DIR:?Set BOT_DATA_DIR to the existing NAS bot data directory}/.env"
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
