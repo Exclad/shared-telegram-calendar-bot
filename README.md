@@ -52,6 +52,14 @@ its target server and rebuilds on deployment through `pull_policy: build`.
 No published image or separate Komodo Build resource is needed. Use Docker Compose
 v2 with build support, on the same NAS Docker host that holds the existing data.
 
+Build steps use Docker's default builder network (`build.network: default`). The
+running bot joins only your existing `allowed-internet` network. These settings
+are independent: the runtime network is not used for dependency installation.
+The NAS Docker host must already have `allowed-internet`; Compose reuses it and
+does not create or delete it. Docker's builder still needs working outbound
+access/DNS for dependency downloads, and the Docker daemon/builder needs access
+to pull the base image.
+
 Create a **Stack** using a Git repository, with:
 
 | Setting | Value |

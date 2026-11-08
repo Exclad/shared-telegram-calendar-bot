@@ -3,10 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Build steps use Docker's normal builder network, separately from runtime.
+      network: default
     image: shared-telegram-calendar-bot:komodo
     pull_policy: build
     restart: unless-stopped
     stop_grace_period: 30s
+    networks:
+      - allowed-internet
     environment:
       DB_PATH: /data/dates.db
     volumes:
@@ -21,3 +25,8 @@ services:
         read_only: true
         bind:
           create_host_path: false
+
+networks:
+  allowed-internet:
+    external: true
+    name: allowed-internet
