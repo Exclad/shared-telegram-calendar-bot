@@ -10,12 +10,17 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton("📅 List Dates"), KeyboardButton("➕ Add Date")],
         [KeyboardButton("📝 View Notes"), KeyboardButton("➕ Add Note")],
         [KeyboardButton("🔍 Upcoming"), KeyboardButton("❤️ Our Journey")],
-        [KeyboardButton("✏️ Edit Date"), KeyboardButton("✏️ Edit Note")],
-        [KeyboardButton("🗑 Delete Item"), KeyboardButton("📤 Export")],
-        [KeyboardButton("🌍 Set Timezone"), KeyboardButton("⚙️ Journey Event")],
-        [KeyboardButton("❓ Help")],
+        [KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_settings_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🌍 Set Timezone"), KeyboardButton("⚙️ Journey Event")],
+        [KeyboardButton("📤 Export")],
+        [KeyboardButton("🏠 Main Menu")],
+    ], resize_keyboard=True)
 
 
 def get_back_keyboard() -> ReplyKeyboardMarkup:
@@ -108,7 +113,7 @@ def build_item_detail_inline(
             ))
         rows.append(nav)
     rows.append([
-        InlineKeyboardButton("✏️ Edit", callback_data=f"edit|{item_type}|{item_id}"),
+        InlineKeyboardButton("✏️ Edit", callback_data=f"edit|{item_type}|{item_id}|{page}"),
         InlineKeyboardButton("🗑 Delete", callback_data=f"del|{item_type}|{item_id}|{page}"),
     ])
     rows.extend(build_list_back_inline(item_type, page).inline_keyboard)
@@ -175,8 +180,14 @@ def build_edit_field_inline(item_type: str, item_id: int) -> InlineKeyboardMarku
             [InlineKeyboardButton("Title", callback_data=f"field|note|{item_id}|Title")],
             [InlineKeyboardButton("Content", callback_data=f"field|note|{item_id}|Content")],
         ]
-    buttons.append([InlineKeyboardButton("Cancel", callback_data="cancel_edit")])
+    buttons.extend(build_edit_cancel_inline(item_type, item_id).inline_keyboard)
     return InlineKeyboardMarkup(buttons)
+
+
+def build_edit_cancel_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Cancel", callback_data=f"cancel_edit|{item_type}|{item_id}"),
+    ]])
 
 
 def build_snooze_inline(event_id: int) -> InlineKeyboardMarkup:

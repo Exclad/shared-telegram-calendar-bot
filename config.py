@@ -26,7 +26,6 @@ IMPORT_FILE = 14
 
 DB_PATH = os.getenv("DB_PATH") or "dates.db"
 MAX_INPUT_LENGTH = 200
-MAX_NOTE_CONTENT_LENGTH = 2000
 
 # Default event name used for the "Our Journey" calculation
 DEFAULT_JOURNEY_EVENT = "Anniversary"

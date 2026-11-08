@@ -12,7 +12,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from config import DB_PATH, DEFAULT_JOURNEY_EVENT, MAX_INPUT_LENGTH, MAX_NOTE_CONTENT_LENGTH
+from config import DB_PATH, DEFAULT_JOURNEY_EVENT, MAX_INPUT_LENGTH
 from utils import parse_iso_date, parse_reminder_days, parse_recurring, parse_time_hhmm
 
 EVENT_FIELDS = {
@@ -272,7 +272,6 @@ def delete_event(chat_id: int, event_id: int) -> bool:
 
 def add_note(chat_id: int, title: str, content: str, photo_id: Optional[str] = None) -> int:
     title = _truncate(title, MAX_INPUT_LENGTH)
-    content = _truncate(content, MAX_NOTE_CONTENT_LENGTH)
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -314,8 +313,6 @@ def update_note(chat_id: int, note_id: int, field: str, value: str,
         value = _truncate(value.strip(), MAX_INPUT_LENGTH)
         if not value:
             raise ValueError("Note title cannot be empty")
-    else:
-        value = _truncate(value, MAX_NOTE_CONTENT_LENGTH)
 
     with get_db() as conn:
         cursor = conn.cursor()

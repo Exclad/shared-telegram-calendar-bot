@@ -13,7 +13,8 @@ A private Telegram bot for couples to track important dates, share notes (text &
 - **🔍 Upcoming & countdowns:** List events in the next 3 months, or `/days <name>` for a countdown to any event.
 - **📤 Export / 📥 Import:** Text summary plus a JSON backup file, restorable with `/import`. Imports add items and restore the backed-up timezone and journey selection when present.
 - **⌨️ Compact lists:** Numbered dates and full text notes keep long titles in the message. Notes are readable immediately; tap a number only to manage an item. Back returns to the full date list or the same note page.
-- **📅 All dates at a glance:** List Dates shows every active date without pagination. Long lists continue automatically in additional messages, with matching number buttons arranged five per row. Passed one-time events remain hidden.
+- **📅 All dates at a glance:** List Dates shows every active date without pagination, sorted by its next occurrence. Friendly dates and Today / Tomorrow / in N days labels use the chat's timezone; original dates remain in the detail view. Long lists continue automatically in additional messages, with matching number buttons arranged five per row. Passed one-time events remain hidden.
+- **⚙️ Simple main menu:** Four rows for everyday actions. Settings contains timezone, journey selection, and export. Save or Cancel returns to the item with Edit/Delete/Back controls; note edits retain the original list page.
 - **📄 Note pagination:** Notes show 5 items per page. Full note pages that exceed Telegram's message limit continue automatically in additional messages, with controls below the final message.
 - **🔒 Access control:** Only users in `ALLOWED_IDS` can interact with the bot; strangers are rate-limited.
 - **🛡️ Gap-protected scheduler:** Missed reminders are caught up after brief downtime (up to a 2-hour window), including across midnight. Failed network sends are retried within that window without resending successful reminders.
@@ -144,15 +145,18 @@ updates or reminder jobs remain visible, and unexpected errors remain errors.
 View Notes shows full text with the original line breaks. Long notes and photo
 captions continue automatically in text messages when they exceed Telegram's
 limits; no extra tap is needed to read them. The full note is also included in Export.
+Note content is saved and edited without an application-level character cutoff,
+including whitespace and line breaks. Telegram still limits each submitted message.
+Content already truncated by older versions cannot be recovered automatically.
 
 ## 📱 How to Use
 
 1. Create a Telegram group with your partner, or use the bot in a private chat.
 2. Add the bot to the group if using a group chat.
 3. Type `/start` to see the main menu.
-4. **Set your timezone** with 🌍 Set Timezone so reminders arrive at the correct local time.
+4. **Set your timezone** with ⚙️ Settings → 🌍 Set Timezone so reminders arrive at the correct local time.
 5. **Add an event** with ➕ Add Date. Give it a name (e.g. "Anniversary"), pick a date from the calendar (or type it), a notification time, and choose recurring or one-time.
-6. **Use ❤️ Our Journey** to see how long you've been together. By default it uses an event named "Anniversary" — customize this with ⚙️ Journey Event.
+6. **Use ❤️ Our Journey** to see how long you've been together. By default it uses an event named "Anniversary" — customize this with ⚙️ Settings → ⚙️ Journey Event.
 
 ### Commands
 
@@ -160,6 +164,7 @@ limits; no extra tap is needed to read them. The full note is also included in E
 |---------|--------|
 | `/start` | Show the main menu |
 | `/help` | Show help and all commands |
+| `/settings` | Timezone, journey event, and export |
 | `/add` | Add a new event |
 | `/addnote` | Add a new note |
 | `/upcoming` | Events in the next 3 months |
@@ -168,6 +173,8 @@ limits; no extra tap is needed to read them. The full note is also included in E
 | `/import` | Restore events/notes from a JSON backup |
 | `/timezone` | Set your timezone |
 | `/journey` | Change journey event |
+| `/editdate` | Edit any saved date by ID, including past one-time dates |
+| `/editnote` | Edit any saved note by ID, including photo notes beyond the first 10 |
 | `/delete` | Delete an item |
 | `/cancel` | Cancel current operation |
 
