@@ -68,9 +68,12 @@ def parse_reminder_days(text: str, max_entries: int = 20) -> list[int] | None:
         return None
     days = []
     for p in parts:
-        if not p.lstrip("-").isdigit():
+        if not p.isdecimal():
             return None
-        n = int(p)
+        try:
+            n = int(p)
+        except ValueError:
+            return None
         if n < 0 or n > 365:
             return None
         days.append(n)
@@ -80,8 +83,8 @@ def parse_reminder_days(text: str, max_entries: int = 20) -> list[int] | None:
 def parse_recurring(text: str) -> bool | None:
     """Parse a yes/no recurring answer. None if unrecognized."""
     t = (text or "").strip().lower()
-    if t in ("yes", "y", "true", "1", "recurring") or t.startswith("yes"):
+    if t in ("yes", "y", "true", "1", "recurring", "yes (recurring)"):
         return True
-    if t in ("no", "n", "false", "0", "one-time", "onetime") or t.startswith("no"):
+    if t in ("no", "n", "false", "0", "one-time", "onetime", "no (one-time)"):
         return False
     return None

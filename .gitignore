@@ -6,6 +6,7 @@ env/
 
 # Ignore the database
 dates.db
+dates.db-*
 
 # Ignore Python cache files
 __pycache__/

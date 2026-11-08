@@ -17,9 +17,9 @@ def main() -> int:
 
         val = get_system_setting(LAST_CHECK_KEY)
         if val is None:
-            # Fresh start — scheduler hasn't ticked yet. Treat as healthy so
-            # the container isn't killed during startup.
-            return 0
+            # Docker's start period tolerates this until the first tick.
+            print("No reminder check recorded", file=sys.stderr)
+            return 1
         last = datetime.fromisoformat(val)
         if last.tzinfo is None:
             return 1

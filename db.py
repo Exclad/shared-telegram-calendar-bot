@@ -370,14 +370,7 @@ def set_timezone(chat_id: int, timezone: str):
 
 def get_journey_event(chat_id: int) -> str:
     """Return the configured journey event *name* (for display)."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT journey_event FROM user_settings WHERE chat_id = ?",
-            (chat_id,),
-        )
-        row = cursor.fetchone()
-        return row["journey_event"] if row and row["journey_event"] else DEFAULT_JOURNEY_EVENT
+    return get_journey_event_for_chat(chat_id)[1]
 
 
 def set_journey_event(chat_id: int, event_id: int, event_name: str):

@@ -17,7 +17,7 @@ class TestApplicationWiring:
         # group 0 conversations + group 1 globals both registered
         assert 0 in app.handlers and 1 in app.handlers
         conv_count = sum(isinstance(h, ConversationHandler) for h in app.handlers[0])
-        assert conv_count == 8
+        assert conv_count == 1
 
     def test_job_queue_available(self):
         app = Application.builder().token("123456:TEST-TOKEN").build()

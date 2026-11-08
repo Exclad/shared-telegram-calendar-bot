@@ -6,16 +6,16 @@ A private Telegram bot for couples to track important dates, share notes (text &
 
 - **📅 Events with reminders:** Add recurring (yearly) or one-time events. Get notified 1 week, 1 day, and on the day — or set a custom per-event schedule.
 - **🗓 Inline calendar picker:** Pick dates from a tappable calendar, or type them in several formats (`17-09-2022`, `17/09/2022`, `2022-09-17`, `17 Sep 2022`).
-- **⏰ Snooze:** Every reminder has a "Snooze 1h" button.
+- **⏰ Snooze:** Every reminder has a "Snooze 1h" button. Pending snoozes are lost if the bot restarts.
 - **🌍 Timezone support:** Each chat sets its own timezone. Reminders fire at the correct local time.
 - **📝 Notes with photos:** Save text notes or photos with captions. Photo notes have their own Edit/Delete buttons.
 - **❤️ "Our Journey":** Calculates years, months, and days since a configurable event (anniversary, wedding, etc.). Tracks the event itself — renaming it doesn't break the link.
 - **🔍 Upcoming & countdowns:** List events in the next 3 months, or `/days <name>` for a countdown to any event.
-- **📤 Export / 📥 Import:** Text summary plus a JSON backup file, restorable with `/import`.
-- **⌨️ Inline keyboards:** Edit or delete items directly from list views — no ID typing needed.
-- **📄 Pagination:** Lists show 5 items per page with Prev/Next navigation.
+- **📤 Export / 📥 Import:** Text summary plus a JSON backup file, restorable with `/import`. Imports add items and restore the backed-up timezone and journey selection when present.
+- **⌨️ Compact lists:** Numbered dates and full text notes keep long titles in the message. Notes are readable immediately; tap a number only to manage an item. Back returns to the same list page.
+- **📄 Pagination:** Lists show 5 items per page. Navigation appears only when needed. Full note pages that exceed Telegram's message limit continue automatically in additional messages, with controls below the final message.
 - **🔒 Access control:** Only users in `ALLOWED_IDS` can interact with the bot; strangers are rate-limited.
-- **🛡️ Gap-protected scheduler:** Missed reminders are caught up after brief downtime (up to a 2-hour window), including across midnight.
+- **🛡️ Gap-protected scheduler:** Missed reminders are caught up after brief downtime (up to a 2-hour window), including across midnight. Failed network sends are retried within that window without resending successful reminders.
 - **💾 Persistent storage:** SQLite with WAL mode; dates stored as sortable ISO strings.
 
 ## 🛠️ Prerequisites
@@ -64,7 +64,7 @@ Or in Portainer: **Images → Build new** — point to the GitHub repo or upload
 
 The `.env` and `dates.db` are excluded from the Docker image via `.dockerignore` — they must be bind-mounted at runtime.
 
-> **Note:** If `dates.db` doesn't exist yet, the bot auto-creates it on first run.
+> **Note:** For a file bind mount, create an empty `dates.db` on the host before starting a fresh container. The bot creates its tables on first run.
 >
 > **Note:** The container runs as a non-root user (uid 1000). Make sure the
 > bind-mounted `dates.db` (and its directory, for SQLite WAL sidecar files)
@@ -77,7 +77,11 @@ The bot logs transient Telegram polling network retries at debug level and
 warns if they persist, at most once every 5 minutes. A polling conflict warning
 also appears at most once every 5 minutes with Telegram's error details; check
 for another bot instance or a configured webhook. Network errors while handling
-updates or reminder jobs remain warnings, and unexpected errors remain errors.
+updates or reminder jobs remain visible, and unexpected errors remain errors.
+
+View Notes shows full text with the original line breaks. Long notes and photo
+captions continue automatically in text messages when they exceed Telegram's
+limits; no extra tap is needed to read them. The full note is also included in Export.
 
 ## 📱 How to Use
 
@@ -129,6 +133,9 @@ python -m pytest tests/
 Covers date parsing, DB operations and migrations, the reminder window logic
 (including the midnight catch-up and DST edge cases), and an end-to-end
 reminder run against a stub bot.
+
+The `per_message=False` PTB warning is expected: the calendar and edit flows combine
+callback buttons with typed replies. Dispatcher regression tests run entirely offline.
 
 ## 💾 File Structure
 

@@ -1,16 +1,8 @@
 """Keyboard layouts for the bot."""
 
 import calendar
-from datetime import date
 
 from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-
-
-def _button_label(prefix: str, value: str, limit: int = 30) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) > limit:
-        text = f"{text[:limit - 1]}…"
-    return f"{prefix} {text}"
 
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
@@ -78,73 +70,85 @@ def get_recurring_keyboard() -> ReplyKeyboardMarkup:
 
 # ── Inline keyboards for list views ────────────────────
 
-def build_event_list_inline(events: list[dict]) -> InlineKeyboardMarkup | None:
-    """Build inline keyboard with Edit/Delete buttons per event."""
-    if not events:
+def _build_numbered_list(items: list[dict], item_type: str, page: int) -> InlineKeyboardMarkup | None:
+    """Match the numbers in the message; keep titles out of narrow buttons."""
+    if not items:
         return None
-    buttons = []
-    for ev in events:
-        row = [
-            InlineKeyboardButton(
-                _button_label("✏️", ev["name"]),
-                callback_data=f"edit|event|{ev['id']}",
-            ),
-            InlineKeyboardButton(
-                "🗑 Del",
-                callback_data=f"del|event|{ev['id']}",
-            ),
-        ]
-        buttons.append(row)
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(str(number), callback_data=f"view|{item_type}|{item['id']}|{page}")
+        for number, item in enumerate(items, 1)
+    ]])
 
 
-def build_note_list_inline(notes: list[dict]) -> InlineKeyboardMarkup | None:
-    """Build inline keyboard with Edit/Delete buttons per note."""
-    if not notes:
-        return None
-    buttons = []
-    for note in notes:
-        row = [
-            InlineKeyboardButton(
-                _button_label("✏️", note["title"]),
-                callback_data=f"edit|note|{note['id']}",
-            ),
-            InlineKeyboardButton(
-                "🗑 Del",
-                callback_data=f"del|note|{note['id']}",
-            ),
-        ]
-        buttons.append(row)
-    return InlineKeyboardMarkup(buttons)
+def build_event_list_inline(events: list[dict], page: int = 1) -> InlineKeyboardMarkup | None:
+    return _build_numbered_list(events, "event", page)
+
+
+def build_note_list_inline(notes: list[dict], page: int = 1) -> InlineKeyboardMarkup | None:
+    return _build_numbered_list(notes, "note", page)
+
+
+def build_item_detail_inline(
+    item_type: str, item_id: int, page: int, part: int = 0, total_parts: int = 1,
+) -> InlineKeyboardMarkup:
+    rows = []
+    if total_parts > 1:
+        nav = []
+        if part > 0:
+            nav.append(InlineKeyboardButton(
+                "‹ Previous", callback_data=f"view|{item_type}|{item_id}|{page}|{part - 1}"
+            ))
+        nav.append(InlineKeyboardButton(f"{part + 1}/{total_parts}", callback_data="pg_noop"))
+        if part + 1 < total_parts:
+            nav.append(InlineKeyboardButton(
+                "Next ›", callback_data=f"view|{item_type}|{item_id}|{page}|{part + 1}"
+            ))
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton("✏️ Edit", callback_data=f"edit|{item_type}|{item_id}"),
+        InlineKeyboardButton("🗑 Delete", callback_data=f"del|{item_type}|{item_id}|{page}"),
+    ])
+    rows.extend(build_list_back_inline(item_type, page).inline_keyboard)
+    return InlineKeyboardMarkup(rows)
+
+
+def build_list_back_inline(item_type: str, page: int) -> InlineKeyboardMarkup:
+    prefix = "ev" if item_type == "event" else "nt"
+    label = "‹ Back to dates" if item_type == "event" else "‹ Back to notes"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"pg|{prefix}|{page}")]])
 
 
 def build_photo_note_inline(note: dict) -> InlineKeyboardMarkup:
     """Edit/Delete buttons attached to a single photo note message."""
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("✏️ Edit", callback_data=f"edit|note|{note['id']}"),
-        InlineKeyboardButton("🗑 Del", callback_data=f"del|note|{note['id']}"),
+        InlineKeyboardButton("🗑 Delete", callback_data=f"del|note|{note['id']}"),
     ]])
 
 
 # ── Inline keyboards for inline actions ────────────────
 
-def build_confirm_delete_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
+def build_confirm_delete_inline(item_type: str, item_id: int, page: int | None = None) -> InlineKeyboardMarkup:
+    suffix = f"|{page}" if page is not None else ""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "✅ Yes, delete",
-                callback_data=f"confirm_del|{item_type}|{item_id}",
+                callback_data=f"confirm_del|{item_type}|{item_id}{suffix}",
             ),
             InlineKeyboardButton(
                 "❌ Cancel",
-                callback_data="cancel_del",
+                callback_data=f"view|{item_type}|{item_id}|{page}" if page is not None else "cancel_del",
             ),
         ]
     ])
 
 
 def build_pagination_nav(page: int, total: int, prefix: str) -> list[list[InlineKeyboardButton]]:
-    """Return a navigation row for paginated lists."""
+    """Show navigation only when there is more than one page."""
+    if total <= 1:
+        return []
+    page = max(1, min(page, total))
     row = []
     if page > 1:
         row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"pg|{prefix}|{page - 1}"))
@@ -209,7 +213,7 @@ def build_calendar_inline(year: int, month: int) -> InlineKeyboardMarkup:
     nav_row = [
         InlineKeyboardButton("«", callback_data=f"cal|nav|{year - 1}|{month}"),
         InlineKeyboardButton("‹", callback_data=f"cal|nav|{prev_y}|{prev_m}"),
-        InlineKeyboardButton("Today", callback_data=f"cal|nav|{date.today().year}|{date.today().month}"),
+        InlineKeyboardButton("Today", callback_data="cal|today"),
         InlineKeyboardButton("›", callback_data=f"cal|nav|{next_y}|{next_m}"),
         InlineKeyboardButton("»", callback_data=f"cal|nav|{year + 1}|{month}"),
     ]

@@ -8,11 +8,13 @@ that spans midnight (up to the 2-hour lookback cap).
 
 import logging
 import html
+import json
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram.constants import ParseMode
+from telegram.error import BadRequest, Forbidden, NetworkError
 from telegram.ext import ContextTypes
 
 from config import DEFAULT_REMINDER_DAYS
@@ -23,6 +25,7 @@ from utils import parse_iso_date, parse_reminder_days
 logger = logging.getLogger(__name__)
 
 LAST_CHECK_KEY = "last_reminder_check"
+FAILED_CHECKS_KEY = "failed_reminder_checks"
 MAX_LOOKBACK = timedelta(hours=2)
 INITIAL_LOOKBACK = timedelta(minutes=5)
 
@@ -64,7 +67,7 @@ def _days_and_years(event_dt: date, recurring: bool, ref_date: date) -> tuple[in
     Returns (None, None) for passed one-time events.
     """
     if recurring:
-        occurrence = _project_year_safe(event_dt, ref_date.year)
+        occurrence = _project_year_safe(event_dt, max(ref_date.year, event_dt.year))
         if occurrence < ref_date:
             occurrence = _project_year_safe(event_dt, ref_date.year + 1)
         years = occurrence.year - event_dt.year
@@ -157,12 +160,29 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
         rows = get_all_events_with_timezone()
     except Exception:
         logger.exception("Failed to fetch events for reminder check")
-        _set_last_check(utc_now)
         return
 
+    try:
+        failed_checks = json.loads(get_system_setting(FAILED_CHECKS_KEY) or "{}")
+        if not isinstance(failed_checks, dict):
+            raise ValueError("not an object")
+    except ValueError:
+        logger.exception("Invalid failed reminder checkpoints")
+        failed_checks = {}
+    retry_checks = {}
+
     for row in rows:
+        row_last_check = last_check
+        previous_failure = failed_checks.get(str(row["id"]))
+        if previous_failure:
+            try:
+                checkpoint = datetime.fromisoformat(previous_failure)
+                if checkpoint.tzinfo is not None:
+                    row_last_check = max(checkpoint, utc_now - MAX_LOOKBACK)
+            except (TypeError, ValueError):
+                pass
         try:
-            due = compute_due_reminder(row, utc_now, last_check)
+            due = compute_due_reminder(row, utc_now, row_last_check)
             if due is None:
                 continue
             days_until, years = due
@@ -178,9 +198,16 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=build_snooze_inline(row["id"]),
             )
             logger.info("Sent reminder: %s (chat=%s, days=%s)", row["name"], row["chat_id"], days_until)
+        except (BadRequest, Forbidden):
+            logger.exception("Telegram rejected reminder for event %s in chat %s", row["id"], row["chat_id"])
+        except NetworkError:
+            retry_checks[str(row["id"])] = row_last_check.isoformat()
+            logger.warning("Reminder send failed for event %s in chat %s; will retry within the catch-up window",
+                           row["id"], row["chat_id"], exc_info=True)
         except Exception:
             logger.exception("Error processing reminder for row %s", dict(row))
 
+    set_system_setting(FAILED_CHECKS_KEY, json.dumps(retry_checks))
     _set_last_check(utc_now)
 
 
