@@ -50,15 +50,25 @@ python main.py
 The repository includes [compose.yaml](compose.yaml). It builds the Dockerfile on
 its target server and rebuilds on deployment through `pull_policy: build`.
 No published image or separate Komodo Build resource is needed. Use Docker Compose
-v2 with build support, on the same NAS Docker host that holds the existing data.
+2.27.1 or newer, on the same NAS Docker host that holds the existing data.
 
-Build steps use Docker's default builder network (`build.network: default`). The
-running bot joins only your existing `allowed-internet` network. These settings
-are independent: the runtime network is not used for dependency installation.
-The NAS Docker host must already have `allowed-internet`; Compose reuses it and
-does not create or delete it. Docker's builder still needs working outbound
-access/DNS for dependency downloads, and the Docker daemon/builder needs access
-to pull the base image.
+Build steps use the build host's network (`build.network: host`) with the
+`network.host` build entitlement. This avoids the default build network, which
+failed to resolve `pypi.org` on the NAS. With the normal local Docker builder,
+dependency downloads use the NAS host network; a remote or containerized builder
+uses its own host/network environment and may need separate configuration.
+
+The running bot joins only your existing `allowed-internet` network. Host
+networking is enabled only for the build, not for the deployed service. The NAS
+Docker host must already have `allowed-internet`; Compose reuses it and does not
+create or delete it. The build host still needs DNS and HTTPS access to
+`pypi.org` and `files.pythonhosted.org`. Image pulls use the Docker daemon/builder
+network separately.
+
+If a build reports that `network.host` is not allowed, its BuildKit daemon must
+also permit that entitlement. If PyPI still cannot resolve with host networking,
+check DNS on the NAS/build host. A subsequent pip 'No matching distribution'
+message after DNS failures does not establish that a pinned version is missing.
 
 Create a **Stack** using a Git repository, with:
 

@@ -3,8 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # Build steps use Docker's normal builder network, separately from runtime.
-      network: default
+      # Use the NAS host network for dependency downloads during the build.
+      network: host
+      entitlements:
+        - network.host
     image: shared-telegram-calendar-bot:komodo
     pull_policy: build
     restart: unless-stopped
