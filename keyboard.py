@@ -70,18 +70,21 @@ def get_recurring_keyboard() -> ReplyKeyboardMarkup:
 
 # ── Inline keyboards for list views ────────────────────
 
-def _build_numbered_list(items: list[dict], item_type: str, page: int) -> InlineKeyboardMarkup | None:
-    """Match the numbers in the message; keep titles out of narrow buttons."""
+def _build_numbered_list(
+    items: list[dict], item_type: str, page: int, start_number: int = 1,
+) -> InlineKeyboardMarkup | None:
+    """Match the numbers in the message with at most five buttons per row."""
     if not items:
         return None
-    return InlineKeyboardMarkup([[
+    buttons = [
         InlineKeyboardButton(str(number), callback_data=f"view|{item_type}|{item['id']}|{page}")
-        for number, item in enumerate(items, 1)
-    ]])
+        for number, item in enumerate(items, start_number)
+    ]
+    return InlineKeyboardMarkup([buttons[i:i + 5] for i in range(0, len(buttons), 5)])
 
 
-def build_event_list_inline(events: list[dict], page: int = 1) -> InlineKeyboardMarkup | None:
-    return _build_numbered_list(events, "event", page)
+def build_event_list_inline(events: list[dict], start_number: int = 1) -> InlineKeyboardMarkup | None:
+    return _build_numbered_list(events, "event", 1, start_number)
 
 
 def build_note_list_inline(notes: list[dict], page: int = 1) -> InlineKeyboardMarkup | None:

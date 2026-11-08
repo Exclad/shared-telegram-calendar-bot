@@ -691,74 +691,59 @@ async def get_note_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── List Events ─────────────────────────────────────────
 
-def _build_event_page(chat_id: int, user_tz: str, page: int) -> tuple[str, int, list[dict]]:
-    """Build paginated event list. Returns (message, total_pages, page_events)."""
+def _build_event_messages(chat_id: int, user_tz: str) -> list[tuple[str, InlineKeyboardMarkup | None]]:
+    """Show every active date, splitting between entries only when needed."""
     all_events = get_events(chat_id)
     today = _chat_today(chat_id)
-    # Filter passed one-time events
     active = [e for e in all_events if not _is_passed_one_time(e, today)]
-    total = max(1, (len(active) + PER_PAGE - 1) // PER_PAGE)
-    page = max(1, min(page, total))
-    start = (page - 1) * PER_PAGE
-    page_events = active[start:start + PER_PAGE]
+    if not active:
+        return [("No active dates saved yet!", None)]
 
-    heading = f"📅 <b>Your dates</b> · {len(active)}"
-    if total > 1:
-        heading += f" · {page}/{total}"
-    msg = f"{heading}\n{secure_text(user_tz)}\n\n"
-    for number, ev in enumerate(page_events, 1):
+    heading = f"📅 <b>Your dates</b> · {len(active)}\n{secure_text(user_tz)}\n\n"
+    footer = "<i>Tap a number to view or manage a date.</i>"
+    if len(all_events) > len(active):
+        footer += "\n<i>Passed one-time events are hidden.</i>"
+    messages = []
+    text, items, start_number = heading, [], 1
+    for number, ev in enumerate(active, 1):
         recurrence = "Yearly" if ev.get("recurring") else "One-time"
-        msg += (
+        entry = (
             f"<b>{number}. {secure_text(ev['name'])}</b>\n"
             f"{secure_text(format_display(ev['event_date']))} · {recurrence}\n\n"
         )
-    if page_events:
-        msg += "<i>Tap a number to view or manage a date.</i>"
-    else:
-        msg += "No active dates saved yet!"
-    if len(all_events) > len(active):
-        msg += "\n<i>Passed one-time events are hidden.</i>"
-    return msg, total, page_events
+        # Bound both message size and the keyboard for very large collections.
+        if items and (_text_length(text + entry + footer) > TELEGRAM_MSG_LIMIT or len(items) >= 50):
+            messages.append((text + footer, build_event_list_inline(items, start_number)))
+            text, items, start_number = heading, [], number
+        text += entry
+        items.append(ev)
+    messages.append((text + footer, build_event_list_inline(items, start_number)))
+    return messages
 
 
 @restricted
-async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1):
+async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_tz = get_timezone(chat_id)
-    msg, total, page_events = _build_event_page(chat_id, user_tz, page)
-
-    if not page_events and page == 1:
+    for text, keyboard in _build_event_messages(chat_id, get_timezone(chat_id)):
         await update.message.reply_text(
-            "No active dates saved yet!", reply_markup=get_main_keyboard()
+            text, parse_mode=ParseMode.HTML, reply_markup=keyboard or get_main_keyboard(),
+            disable_web_page_preview=True, do_quote=False,
         )
-        return
-
-    page = max(1, min(page, total))
-    item_kb = build_event_list_inline(page_events, page)
-    nav_rows = build_pagination_nav(page, total, "ev")
-    keyboard = InlineKeyboardMarkup(
-        list(item_kb.inline_keyboard if item_kb else []) + nav_rows
-    )
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True)
 
 
 @restricted
 async def page_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: navigate event list pages."""
+    """Back and legacy pagination buttons both refresh the complete date list."""
     query = update.callback_query
     await query.answer()
-    target_page = int(query.data.split("|")[2])
     chat_id = update.effective_chat.id
-    user_tz = get_timezone(chat_id)
-    msg, total, page_events = _build_event_page(chat_id, user_tz, target_page)
-
-    target_page = max(1, min(target_page, total))
-    item_kb = build_event_list_inline(page_events, target_page)
-    nav_rows = build_pagination_nav(target_page, total, "ev")
-    keyboard = InlineKeyboardMarkup(
-        list(item_kb.inline_keyboard if item_kb else []) + nav_rows
-    )
-    await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True)
+    messages = _build_event_messages(chat_id, get_timezone(chat_id))
+    for index, (text, keyboard) in enumerate(messages):
+        kwargs = dict(parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True)
+        if index == 0:
+            await query.edit_message_text(text, **kwargs)
+        else:
+            await query.message.reply_text(text, do_quote=False, **kwargs)
 
 
 # ── List Notes ──────────────────────────────────────────

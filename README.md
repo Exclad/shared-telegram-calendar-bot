@@ -12,8 +12,9 @@ A private Telegram bot for couples to track important dates, share notes (text &
 - **❤️ "Our Journey":** Calculates years, months, and days since a configurable event (anniversary, wedding, etc.). Tracks the event itself — renaming it doesn't break the link.
 - **🔍 Upcoming & countdowns:** List events in the next 3 months, or `/days <name>` for a countdown to any event.
 - **📤 Export / 📥 Import:** Text summary plus a JSON backup file, restorable with `/import`. Imports add items and restore the backed-up timezone and journey selection when present.
-- **⌨️ Compact lists:** Numbered dates and full text notes keep long titles in the message. Notes are readable immediately; tap a number only to manage an item. Back returns to the same list page.
-- **📄 Pagination:** Lists show 5 items per page. Navigation appears only when needed. Full note pages that exceed Telegram's message limit continue automatically in additional messages, with controls below the final message.
+- **⌨️ Compact lists:** Numbered dates and full text notes keep long titles in the message. Notes are readable immediately; tap a number only to manage an item. Back returns to the full date list or the same note page.
+- **📅 All dates at a glance:** List Dates shows every active date without pagination. Long lists continue automatically in additional messages, with matching number buttons arranged five per row. Passed one-time events remain hidden.
+- **📄 Note pagination:** Notes show 5 items per page. Full note pages that exceed Telegram's message limit continue automatically in additional messages, with controls below the final message.
 - **🔒 Access control:** Only users in `ALLOWED_IDS` can interact with the bot; strangers are rate-limited.
 - **🛡️ Gap-protected scheduler:** Missed reminders are caught up after brief downtime (up to a 2-hour window), including across midnight. Failed network sends are retried within that window without resending successful reminders.
 - **💾 Persistent storage:** SQLite with WAL mode; dates stored as sortable ISO strings.

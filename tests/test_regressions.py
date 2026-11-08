@@ -396,7 +396,7 @@ def inline_buttons(params):
 @pytest.mark.parametrize("item_type,menu,prefix", [
     ("event", "📅 List Dates", "ev"), ("note", "📝 View Notes", "nt"),
 ])
-async def test_numbered_lists_open_the_correct_item_and_return_to_the_same_page(
+async def test_numbered_lists_open_the_correct_item_and_return_to_the_list(
     offline_app, item_type, menu, prefix,
 ):
     app, request, errors = offline_app
@@ -423,7 +423,8 @@ async def test_numbered_lists_open_the_correct_item_and_return_to_the_same_page(
     detail = request.calls[-1][1]
     assert name in visible_text(detail)
     back = next(b for b in inline_buttons(detail) if b["callback_data"].startswith("pg|"))
-    assert back["callback_data"] == f"pg|{prefix}|2"
+    expected_page = 1 if item_type == "event" else 2
+    assert back["callback_data"] == f"pg|{prefix}|{expected_page}"
     await app.process_update(callback_update(app, back["callback_data"]))
     assert request.calls[-1][1]["text"] == page["text"]
     await app.process_update(callback_update(app, select["callback_data"]))
@@ -585,4 +586,67 @@ async def test_photo_note_displays_its_full_caption_without_an_extra_tap(offline
     assert stored["content"] in displayed
     assert "…" not in displayed
     assert any(b["callback_data"] == f"edit|note|{note_id}" for b in inline_buttons(controls))
+    assert not errors
+
+
+@pytest.mark.asyncio
+async def test_list_dates_shows_every_active_date_without_pagination(offline_app, monkeypatch):
+    app, request, errors = offline_app
+    monkeypatch.setattr(handlers, '_chat_today', lambda chat_id: date(2026, 11, 9))
+    expected_ids = [db.add_event(1, f"Birthday <&> {i}", "2020-01-01", "09:00") for i in range(9)]
+    expected_ids.append(db.add_event(1, "Future appointment", "2030-01-01", "10:00", recurring=False))
+    db.add_event(1, "Past appointment", "2020-01-01", "10:00", recurring=False)
+    db.add_event(2, "Another chat", "2020-01-01", "10:00")
+    await app.process_update(message_update(app, "📅 List Dates"))
+    messages = [p for method, p in request.calls if method == "sendMessage"]
+    assert len(messages) == 1
+    text = visible_text(messages[0])
+    buttons = inline_buttons(messages[0])
+    assert [b["text"] for b in buttons] == [str(n) for n in range(1, 11)]
+    assert {int(b["callback_data"].split("|")[2]) for b in buttons} == set(expected_ids)
+    assert all(b["callback_data"].startswith("view|event|") for b in buttons)
+    assert all(len(row) <= 5 for row in messages[0]["reply_markup"]["inline_keyboard"])
+    assert "Past appointment" not in text and "Another chat" not in text
+    for number, button in enumerate(buttons, 1):
+        event = db.get_event(1, int(button["callback_data"].split("|")[2]))
+        assert f"{number}. {event['name']}\n" in text
+    # Old Next buttons must also display the entire list.
+    await app.process_update(callback_update(app, "pg|ev|2"))
+    assert request.calls[-1][1]["text"] == messages[0]["text"]
+    assert not errors
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,suffix", [(12, "<>&😀" * 40), (101, "Event")])
+async def test_long_date_lists_send_every_entry_with_matching_controls(offline_app, count, suffix):
+    app, request, errors = offline_app
+    for i in range(count):
+        db.add_event(1, f"{i:03d} {suffix}", "2020-01-01", "09:00")
+    expected = db.get_events(1)
+    await app.process_update(message_update(app, "📅 List Dates"))
+    messages = [p for method, p in request.calls if method == "sendMessage"]
+    assert len(messages) > 1
+    all_buttons = []
+    for message in messages:
+        text = visible_text(message)
+        buttons = inline_buttons(message)
+        all_buttons.extend(buttons)
+        assert all(len(row) <= 5 for row in message["reply_markup"]["inline_keyboard"])
+        for button in buttons:
+            assert button["callback_data"].startswith("view|event|")
+            number = int(button["text"])
+            event = expected[number - 1]
+            assert int(button["callback_data"].split("|")[2]) == event["id"]
+            assert f"{number}. {event['name']}\n" in text
+    assert [b["text"] for b in all_buttons] == [str(n) for n in range(1, count + 1)]
+    # Selecting the final number must still open that event, even after splitting.
+    await app.process_update(callback_update(app, all_buttons[-1]["callback_data"]))
+    assert expected[-1]["name"] in visible_text(request.calls[-1][1])
+    before = len(request.calls)
+    back = next(b["callback_data"] for b in inline_buttons(request.calls[-1][1])
+                if b["callback_data"].startswith("pg|ev|"))
+    await app.process_update(callback_update(app, back))
+    returned = [p for method, p in request.calls[before:]
+                if method in ("editMessageText", "sendMessage")]
+    assert [p["text"] for p in returned] == [p["text"] for p in messages]
     assert not errors
